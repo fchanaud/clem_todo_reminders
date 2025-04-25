@@ -3,6 +3,7 @@ services:
   - type: web
     name: clem-todo-frontend
     env: node
+    plan: free
     buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
@@ -12,17 +13,20 @@ services:
         sync: false
       - key: NODE_ENV
         value: production
+    autoDeploy: true
 
   # Backend FastAPI service
   - type: web
     name: clem-todo-backend
     env: python
+    plan: free
     buildCommand: cd api && pip install -r requirements.txt
-    startCommand: cd api && gunicorn server:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:$PORT
+    startCommand: cd api && gunicorn server:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 30
     envVars:
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
         sync: false
       - key: OPENAI_API_KEY
-        sync: false 
+        sync: false
+    autoDeploy: true 

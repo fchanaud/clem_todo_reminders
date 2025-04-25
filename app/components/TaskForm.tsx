@@ -13,6 +13,8 @@ interface TaskRequest {
   hours_before?: number;
 }
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 export default function TaskForm({ onTaskAdded }: TaskFormProps) {
   const [title, setTitle] = useState('');
   const [dueDate, setDueDate] = useState('');
@@ -44,7 +46,7 @@ export default function TaskForm({ onTaskAdded }: TaskFormProps) {
         requestBody.hours_before = parseInt(hoursBefore);
       }
 
-      const response = await fetch('http://localhost:8000/api/tasks', {
+      const response = await fetch(`${API_URL}/api/tasks`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
