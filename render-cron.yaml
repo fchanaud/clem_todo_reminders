@@ -2,7 +2,7 @@ jobs:
   # Cron job to check for reminders
   - type: cron
     name: check-reminders
-    schedule: "0 8-20 * * *"  # Run every hour between 8am and 8pm UK time
+    schedule: "0 * * * *"  # Run on the hour, every hour
     command: curl -X POST -H "Authorization: Bearer ${VERIFY_TOKEN}" https://clem-todo-backend.onrender.com/api/check-reminders
     envVars:
       - key: VERIFY_TOKEN
