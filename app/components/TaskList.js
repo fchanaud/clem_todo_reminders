@@ -2,31 +2,11 @@ import { useEffect, useState } from 'react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 
-interface Reminder {
-  id: string;
-  task_id: string;
-  reminder_time: string;
-}
-
-interface Task {
-  id: string;
-  title: string;
-  due_time: string;
-  priority: string;
-  completed: boolean;
-  completed_at?: string;
-  reminders: Reminder[];
-}
-
-interface TaskListProps {
-  refreshTrigger: number;
-}
-
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-export default function TaskList({ refreshTrigger }: TaskListProps) {
-  const [incompleteTasks, setIncompleteTasks] = useState<Task[]>([]);
-  const [completedTasks, setCompletedTasks] = useState<Task[]>([]);
+export default function TaskList({ refreshTrigger }) {
+  const [incompleteTasks, setIncompleteTasks] = useState([]);
+  const [completedTasks, setCompletedTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showCompleted, setShowCompleted] = useState(false);
 
@@ -72,7 +52,7 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
     fetchTasks();
   }, [refreshTrigger]);
 
-  const handleComplete = async (taskId: string) => {
+  const handleComplete = async (taskId) => {
     try {
       const response = await fetch(`${API_URL}/api/tasks/${taskId}/complete`, {
         method: 'PATCH',
@@ -90,7 +70,7 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
     }
   };
 
-  const handleDelete = async (taskId: string) => {
+  const handleDelete = async (taskId) => {
     try {
       const response = await fetch(`${API_URL}/api/tasks/${taskId}`, {
         method: 'DELETE',
@@ -108,7 +88,7 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
     }
   };
 
-  const TaskCard = ({ task, isCompleted = false }: { task: Task; isCompleted?: boolean }) => (
+  const TaskCard = ({ task, isCompleted = false }) => (
     <div className="bg-white rounded-lg shadow-sm p-4 mb-3 border border-gray-100">
       <div className="flex flex-col">
         <div className="flex-1">

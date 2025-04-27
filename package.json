@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "npm install && next build",
+    "build": "next build",
     "start": "next start",
     "lint": "next lint"
   },
@@ -21,9 +21,9 @@
     "tailwindcss": "^3.4.1"
   },
   "devDependencies": {
-    "@types/node": "^20.17.31",
-    "@types/react": "^18.3.20",
-    "@types/react-dom": "^18.2.19",
-    "typescript": "^5.8.3"
+    "@types/react": "^18.2.0",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "^14.2.28",
+    "typescript": "^5.3.2"
   }
 }

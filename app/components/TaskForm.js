@@ -1,21 +1,9 @@
 import { useState, FormEvent } from 'react';
 import toast from 'react-hot-toast';
 
-interface TaskFormProps {
-  onTaskAdded: () => void;
-}
-
-interface TaskRequest {
-  title: string;
-  due_time: string;
-  priority: string;
-  single_reminder?: boolean;
-  hours_before?: number;
-}
-
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-export default function TaskForm({ onTaskAdded }: TaskFormProps) {
+export default function TaskForm({ onTaskAdded }) {
   const [title, setTitle] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [dueHour, setDueHour] = useState('09');
@@ -23,18 +11,18 @@ export default function TaskForm({ onTaskAdded }: TaskFormProps) {
   const [useSingleReminder, setUseSingleReminder] = useState(false);
   const [hoursBefore, setHoursBefore] = useState('2');
 
-  const capitalizeFirstLetter = (string: string) => {
+  const capitalizeFirstLetter = (string) => {
     return string.charAt(0).toUpperCase() + string.slice(1);
   };
 
-  const handleSubmit = async (e: FormEvent) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
     try {
       // Combine date and hour into ISO string
       const combinedDueTime = new Date(`${dueDate}T${dueHour}:00:00`);
       
-      const requestBody: TaskRequest = {
+      const requestBody = {
         title: capitalizeFirstLetter(title.trim()),
         due_time: combinedDueTime.toISOString(),
         priority,
