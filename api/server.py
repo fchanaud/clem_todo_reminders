@@ -64,6 +64,7 @@ try:
     print(f"GoTrue version: {getattr(gotrue, '__version__', 'unknown')}")
     
     # Create Supabase client without any extra options that might cause compatibility issues
+    # Use a simple client creation without additional options
     supabase: Client = create_client(supabase_url, supabase_key)
 except Exception as e:
     print(f"CRITICAL ERROR initializing Supabase client: {e}")
