@@ -14,9 +14,9 @@ import sys
 # Load environment variables
 load_dotenv()
 
-# Get Supabase credentials
-supabase_url = os.getenv("NEXT_PUBLIC_SUPABASE_URL")
-supabase_key = os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+# Get Supabase credentials with fallbacks
+supabase_url = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -49,6 +49,13 @@ try:
         if key.startswith(('NEXT_PUBLIC_', 'SUPABASE_', 'OPENAI_')):
             print(f"{key}: {'*' * len(value) if value else 'None'}")
     
+    # Print package versions for debugging
+    import supabase
+    import gotrue
+    print(f"Supabase version: {getattr(supabase, '__version__', 'unknown')}")
+    print(f"GoTrue version: {getattr(gotrue, '__version__', 'unknown')}")
+    
+    # Create Supabase client without any extra options that might cause compatibility issues
     supabase: Client = create_client(supabase_url, supabase_key)
 except Exception as e:
     print(f"CRITICAL ERROR initializing Supabase client: {e}")
