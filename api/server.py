@@ -12,6 +12,21 @@ import json
 import sys
 import requests
 import time
+import logging  # Add logging import
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+logger = logging.getLogger("todo-reminders")
+
+# Add these lines for even more visible debugging
+print("="*80)
+print("SERVER STARTING - DEBUGGING ENABLED")
+print("="*80)
 
 # Load environment variables
 load_dotenv()
@@ -90,7 +105,7 @@ class Task(BaseModel):
 def send_whatsapp_reminder(task_title, task_priority, due_time, recipient=RECIPIENT_PHONE_NUMBER):
     """Send a WhatsApp message for a task reminder using Meta Cloud API"""
     if not META_ACCESS_TOKEN or not META_PHONE_NUMBER_ID:
-        print("Meta WhatsApp API not configured, skipping WhatsApp notification")
+        logger.warning("Meta WhatsApp API not configured, skipping WhatsApp notification")
         return None
     
     try:
@@ -107,6 +122,8 @@ def send_whatsapp_reminder(task_title, task_priority, due_time, recipient=RECIPI
         
         # Create a message with task details
         message_body = f"🔔 Reminder: \"{task_title}\" is due on {due_time_str}\nPriority: {task_priority}"
+        
+        logger.info(f"Preparing WhatsApp message: {message_body}")
         
         # Meta WhatsApp API endpoint
         url = f"https://graph.facebook.com/{META_API_VERSION}/{META_PHONE_NUMBER_ID}/messages"
@@ -129,24 +146,35 @@ def send_whatsapp_reminder(task_title, task_priority, due_time, recipient=RECIPI
             "Content-Type": "application/json"
         }
         
+        # Log request details (but hide the token)
+        logger.info(f"WhatsApp API request to URL: {url}")
+        logger.info(f"WhatsApp API payload: {json.dumps(payload)}")
+        logger.info(f"WhatsApp API request headers: Authorization: Bearer ******, Content-Type: application/json")
+        
         # Send the request
         response = requests.post(url, json=payload, headers=headers)
         response_data = response.json()
         
         if response.status_code == 200:
-            print(f"WhatsApp reminder sent successfully: {response_data}")
+            logger.info(f"WhatsApp reminder sent successfully: {json.dumps(response_data)}")
             # Return the message ID from the response
             return response_data.get("messages", [{}])[0].get("id")
         else:
-            print(f"Error sending WhatsApp reminder: {response_data}")
+            logger.error(f"Error sending WhatsApp reminder: Status {response.status_code}, Response: {json.dumps(response_data)}")
             return None
     except Exception as e:
-        print(f"Error sending WhatsApp reminder: {str(e)}")
+        logger.error(f"Error sending WhatsApp reminder: {str(e)}", exc_info=True)
         return None
 
 def check_upcoming_reminders():
-    """Check for reminders that match the current hour in UK time"""
+    """Check for reminders that match the current hour in UK time, 
+    with additional logic to handle Render's free tier spin-down behavior"""
     try:
+        logger.info("Starting reminder check")
+        print("\n" + "-"*80)
+        print("- CHECKING REMINDERS")
+        print("-"*80)
+        
         # Get current time in UTC
         now_utc = datetime.now(timezone.utc)
         
@@ -157,20 +185,43 @@ def check_upcoming_reminders():
         uk_offset = 1 if is_british_summer_time else 0
         now_uk = now_utc + timedelta(hours=uk_offset)
         
-        print(f"Current time - UTC: {now_utc.isoformat()}, UK: {now_uk.isoformat()}, BST active: {is_british_summer_time}")
+        print(f"\nTIME INFO:")
+        print(f"  UTC time: {now_utc.isoformat()}")
+        print(f"  UK time:  {now_uk.isoformat()}")
+        print(f"  BST active: {is_british_summer_time}")
+        logger.info(f"Current time - UTC: {now_utc.isoformat()}, UK: {now_uk.isoformat()}, BST active: {is_british_summer_time}")
         
-        # Get the start and end of the current UK hour
-        uk_hour_start = now_uk.replace(minute=0, second=0, microsecond=0)
-        uk_hour_end = uk_hour_start + timedelta(hours=1)
+        # For Render free plan: check for missed reminders due to spin-down
+        # Look back up to 6 hours to catch any reminders we might have missed
+        # This will help recover after app spin-down periods
+        catchup_hours = 6  # Look back this many hours for missed reminders
+        
+        # Get current UK hour and calculate the range for our query
+        current_uk_hour = now_uk.replace(minute=0, second=0, microsecond=0)
+        catchup_start_uk = current_uk_hour - timedelta(hours=catchup_hours)
         
         # Convert back to UTC for database query
-        utc_hour_start = uk_hour_start - timedelta(hours=uk_offset)
-        utc_hour_end = uk_hour_end - timedelta(hours=uk_offset)
+        utc_hour_start = catchup_start_uk - timedelta(hours=uk_offset)
+        utc_hour_end = current_uk_hour + timedelta(hours=1) - timedelta(hours=uk_offset)
         
-        print(f"Checking reminders for UK hour {uk_hour_start.hour}:00-{uk_hour_start.hour}:59")
-        print(f"UTC query range: {utc_hour_start.isoformat()} to {utc_hour_end.isoformat()}")
+        print(f"\nQUERY PARAMETERS (WITH CATCHUP):")
+        print(f"  Current UK hour: {current_uk_hour.hour}:00")
+        print(f"  Catchup range: {catchup_start_uk.isoformat()} to {current_uk_hour.isoformat()}")
+        print(f"  UTC query range: {utc_hour_start.isoformat()} to {utc_hour_end.isoformat()}")
+        logger.info(f"Checking reminders with catchup - looking back {catchup_hours} hours")
+        logger.info(f"UTC query range: {utc_hour_start.isoformat()} to {utc_hour_end.isoformat()}")
         
-        # Query for reminders in the current UK hour (converted to UTC)
+        # Query for reminders within our range
+        print(f"\nQUERYING DATABASE...")
+        query = f"""
+            SELECT * FROM reminders
+            JOIN tasks ON reminders.task_id = tasks.id
+            WHERE reminder_time >= '{utc_hour_start.isoformat()}'
+            AND reminder_time < '{utc_hour_end.isoformat()}'
+            AND tasks.completed = false
+        """
+        print(f"  Query (simplified): {query}")
+        
         reminders_result = (
             supabase.table("reminders")
             .select("*, tasks(*)")
@@ -180,28 +231,132 @@ def check_upcoming_reminders():
         )
         
         reminders = reminders_result.data
-        print(f"Found {len(reminders)} reminders scheduled for this hour")
+        print(f"\nRESULTS:")
+        print(f"  Found {len(reminders)} reminders in the catchup window")
+        logger.info(f"Found {len(reminders)} reminders in the catchup window")
+        
+        # Add a processed status tracker to avoid duplicate notifications
+        # Check last processed reminder time in database
+        try:
+            processed_status = (
+                supabase.table("app_status")
+                .select("*")
+                .eq("name", "last_processed_time")
+                .execute()
+            ).data
+            
+            if processed_status and len(processed_status) > 0:
+                last_processed_time = datetime.fromisoformat(processed_status[0]["value"].replace('Z', '+00:00'))
+                print(f"  Last processed time: {last_processed_time.isoformat()}")
+            else:
+                # If no record exists, create one with a default time
+                default_time = now_utc - timedelta(hours=catchup_hours)
+                last_processed_time = default_time
+                print(f"  No last processed time found, defaulting to {catchup_hours} hours ago")
+                
+                supabase.table("app_status").insert({
+                    "name": "last_processed_time",
+                    "value": default_time.isoformat()
+                }).execute()
+        except Exception as e:
+            # If table doesn't exist yet, create it
+            print(f"  Error getting last processed time: {str(e)}")
+            print(f"  Creating app_status table if needed...")
+            
+            try:
+                # Try to create the table if it doesn't exist
+                supabase.table("app_status").insert({
+                    "name": "last_processed_time",
+                    "value": (now_utc - timedelta(hours=catchup_hours)).isoformat()
+                }).execute()
+                
+                last_processed_time = now_utc - timedelta(hours=catchup_hours)
+                print(f"  Created new last_processed_time record")
+            except Exception as table_e:
+                print(f"  Could not create app_status: {str(table_e)}")
+                # Default to processing all reminders in our window
+                last_processed_time = now_utc - timedelta(hours=catchup_hours)
+        
+        if len(reminders) > 0:
+            print(f"\nREMINDER DETAILS:")
+            for i, reminder in enumerate(reminders):
+                task = reminder.get("tasks", {})
+                reminder_time = datetime.fromisoformat(reminder.get("reminder_time").replace('Z', '+00:00'))
+                time_ago = now_utc - reminder_time
+                hours_ago = time_ago.total_seconds() / 3600
+                
+                print(f"  {i+1}. Task: {task.get('title', 'Unknown')}")
+                print(f"     Reminder time: {reminder.get('reminder_time', 'Unknown')} ({hours_ago:.1f} hours ago)")
+                print(f"     Task completed: {task.get('completed', False)}")
+                print(f"     Priority: {task.get('priority', 'Unknown')}")
+                
+            logger.info(f"Reminder data: {json.dumps(reminders, default=str)}")
+        else:
+            print("  No reminders found in the catchup window")
         
         # Process each reminder
-        for reminder in reminders:
+        sent_count = 0
+        skipped_already_processed = 0
+        if len(reminders) > 0:
+            print(f"\nPROCESSING REMINDERS:")
+            
+        for i, reminder in enumerate(reminders):
             task = reminder.get("tasks", {})
             if task and not task.get("completed", False):
                 reminder_time = datetime.fromisoformat(reminder.get("reminder_time").replace('Z', '+00:00'))
                 
-                print(f"Processing reminder for task: {task.get('title')} at {reminder_time.isoformat()}")
+                # Skip if we already processed this reminder
+                if reminder_time <= last_processed_time:
+                    print(f"  Skipping reminder {i+1}: {task.get('title')} - Already processed before")
+                    skipped_already_processed += 1
+                    continue
+                
+                print(f"  Processing reminder {i+1}: {task.get('title')} at {reminder_time.isoformat()}")
+                logger.info(f"Processing reminder for task: {task.get('title')} at {reminder_time.isoformat()}")
+                logger.info(f"Task details: {json.dumps(task, default=str)}")
                 
                 # Get the task's phone number or use the default
                 recipient = task.get("phone_number", RECIPIENT_PHONE_NUMBER)
+                print(f"  Sending to: {recipient}")
+                logger.info(f"Sending WhatsApp message to recipient: {recipient}")
                 
                 # Send the WhatsApp reminder
-                send_whatsapp_reminder(
+                message_id = send_whatsapp_reminder(
                     task_title=task.get("title"),
                     task_priority=task.get("priority"),
                     due_time=datetime.fromisoformat(task.get("due_time").replace('Z', '+00:00')),
                     recipient=recipient
                 )
+                
+                if message_id:
+                    print(f"  ✅ Message sent successfully, ID: {message_id}")
+                    sent_count += 1
+                else:
+                    print(f"  ❌ Failed to send message")
+                logger.info(f"WhatsApp message sent with ID: {message_id}")
+            else:
+                reason = "Task already completed" if task and task.get("completed", False) else "Task not found"
+                print(f"  Skipping reminder {i+1}: {reason}")
+                logger.info(f"Skipping reminder {reminder.get('id')} - Task completed or missing: {bool(task)}, Completed: {task.get('completed', False) if task else 'N/A'}")
+        
+        # Update the last processed time
+        try:
+            supabase.table("app_status").update({"value": now_utc.isoformat()}).eq("name", "last_processed_time").execute()
+            print(f"  Updated last processed time to: {now_utc.isoformat()}")
+        except Exception as e:
+            print(f"  Error updating last processed time: {str(e)}")
+        
+        print("\n" + "-"*80)
+        print(f"- REMINDER CHECK COMPLETED: {sent_count} sent, {skipped_already_processed} already processed")
+        print("-"*80)
+        logger.info(f"Reminder check completed successfully: {sent_count} sent, {skipped_already_processed} already processed")
+        return True
     except Exception as e:
-        print(f"Error checking upcoming reminders: {str(e)}")
+        print(f"\n❌ ERROR: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        logger.error(f"Error checking upcoming reminders: {str(e)}", exc_info=True)
+        return False
 
 def is_bst(utc_time):
     """Check if the current time is during British Summer Time"""
@@ -407,21 +562,44 @@ async def test_whatsapp_message():
 # Add a new endpoint for checking reminders with security
 @app.post("/api/check-reminders")
 async def check_reminders_endpoint(request: Request):
+    # Added highly visible debug messages
+    print("\n" + "*"*80)
+    print("* CHECK-REMINDERS ENDPOINT CALLED")
+    print("*"*80)
+    
     # Get verification token from environment
     verify_token = os.getenv("VERIFY_TOKEN")
     
     # Get authorization header
     auth_header = request.headers.get("Authorization")
     
+    # Print all headers for debugging
+    print("\nRequest headers:")
+    for header, value in request.headers.items():
+        print(f"  {header}: {value[:20]}{'...' if len(value) > 20 else ''}")
+    
+    logger.info(f"Received check-reminders request with auth: {auth_header[:15] + '...' if auth_header else 'None'}")
+    
     # Verify the token for security (ensure only the cron job can trigger this)
     if verify_token and (not auth_header or auth_header != f"Bearer {verify_token}"):
+        print(f"\n❌ UNAUTHORIZED - Expected 'Bearer {verify_token}', got '{auth_header}'")
+        logger.warning(f"Unauthorized access attempt to check-reminders endpoint")
         raise HTTPException(status_code=401, detail="Unauthorized")
     
+    print(f"\n✅ AUTHORIZATION SUCCESSFUL")
+    
     try:
-        check_upcoming_reminders()
-        return {"message": "Reminders checked successfully", "timestamp": datetime.now(timezone.utc).isoformat()}
+        print("\nStarting reminder check...")
+        success = check_upcoming_reminders()
+        result = {"message": "Reminders checked successfully", "timestamp": datetime.now(timezone.utc).isoformat(), "success": success}
+        print(f"\n✅ REMINDER CHECK COMPLETED: {json.dumps(result)}")
+        logger.info(f"check-reminders endpoint completed: {json.dumps(result)}")
+        return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = str(e)
+        print(f"\n❌ ERROR IN REMINDER CHECK: {error_msg}")
+        logger.error(f"Error in check-reminders endpoint: {error_msg}", exc_info=True)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 @app.get("/")
 async def health_check():
