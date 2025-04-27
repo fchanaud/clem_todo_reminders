@@ -16,4 +16,8 @@ body {
   input[type="datetime-local"] {
     @apply block w-full rounded-lg border-gray-200 bg-gray-50 py-3 px-4 text-sm placeholder-gray-300 shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary;
   }
+}
+
+.form-input {
+  @apply block w-full rounded-lg border-gray-200 bg-gray-50 py-3 px-4 text-sm placeholder-gray-300 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500;
 } 
