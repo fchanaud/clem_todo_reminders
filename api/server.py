@@ -9,6 +9,7 @@ from supabase import create_client, Client
 from openai import OpenAI
 from datetime import timezone
 import json
+import sys
 
 # Load environment variables
 load_dotenv()
@@ -42,11 +43,20 @@ app.add_middleware(
 
 # Initialize Supabase client
 try:
+    # Print out environment variables for debugging
+    print("Environment Variables:")
+    for key, value in os.environ.items():
+        if key.startswith(('NEXT_PUBLIC_', 'SUPABASE_', 'OPENAI_')):
+            print(f"{key}: {'*' * len(value) if value else 'None'}")
+    
     supabase: Client = create_client(supabase_url, supabase_key)
 except Exception as e:
-    print(f"Error initializing Supabase client: {e}")
+    print(f"CRITICAL ERROR initializing Supabase client: {e}")
     print(f"Supabase URL: {supabase_url}")
     print(f"Supabase Key Length: {len(supabase_key) if supabase_key else 'None'}")
+    print(f"Full error traceback:", file=sys.stderr)
+    import traceback
+    traceback.print_exc(file=sys.stderr)
     raise
 
 class Reminder(BaseModel):
