@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, timedelta
@@ -10,6 +10,8 @@ from openai import OpenAI
 from datetime import timezone
 import json
 import sys
+import requests
+import time
 
 # Load environment variables
 load_dotenv()
@@ -17,6 +19,12 @@ load_dotenv()
 # Get Supabase credentials with fallbacks
 supabase_url = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+
+# Meta WhatsApp Business API configuration
+META_API_VERSION = os.getenv("META_API_VERSION", "v18.0")
+META_PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
+META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN")
+RECIPIENT_PHONE_NUMBER = os.getenv("RECIPIENT_PHONE_NUMBER", "33668695116")  # Default to the fixed WhatsApp number
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -46,7 +54,7 @@ try:
     # Print out environment variables for debugging
     print("Environment Variables:")
     for key, value in os.environ.items():
-        if key.startswith(('NEXT_PUBLIC_', 'SUPABASE_', 'OPENAI_')):
+        if key.startswith(('NEXT_PUBLIC_', 'SUPABASE_', 'OPENAI_', 'META_')):
             print(f"{key}: {'*' * len(value) if value else 'None'}")
     
     # Print package versions for debugging
@@ -76,6 +84,105 @@ class Task(BaseModel):
     priority: str
     single_reminder: bool = False
     hours_before: Optional[int] = None
+    phone_number: Optional[str] = None
+
+def send_whatsapp_reminder(task_title, task_priority, due_time, recipient=RECIPIENT_PHONE_NUMBER):
+    """Send a WhatsApp message for a task reminder using Meta Cloud API"""
+    if not META_ACCESS_TOKEN or not META_PHONE_NUMBER_ID:
+        print("Meta WhatsApp API not configured, skipping WhatsApp notification")
+        return None
+    
+    try:
+        # Ensure the recipient number has the correct format (remove any "whatsapp:" prefix)
+        if recipient.startswith("whatsapp:"):
+            recipient = recipient[9:]  # Remove "whatsapp:" prefix
+        
+        # Ensure the number starts with a + if not already
+        if not recipient.startswith("+"):
+            recipient = "+" + recipient
+            
+        # Format the due time for display
+        due_time_str = due_time.strftime("%A, %B %d at %I:%M %p")
+        
+        # Create a message with task details
+        message_body = f"🔔 Reminder: \"{task_title}\" is due on {due_time_str}\nPriority: {task_priority}"
+        
+        # Meta WhatsApp API endpoint
+        url = f"https://graph.facebook.com/{META_API_VERSION}/{META_PHONE_NUMBER_ID}/messages"
+        
+        # Prepare the payload
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": recipient,
+            "type": "text",
+            "text": {
+                "preview_url": False,
+                "body": message_body
+            }
+        }
+        
+        # Headers with the access token
+        headers = {
+            "Authorization": f"Bearer {META_ACCESS_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        # Send the request
+        response = requests.post(url, json=payload, headers=headers)
+        response_data = response.json()
+        
+        if response.status_code == 200:
+            print(f"WhatsApp reminder sent successfully: {response_data}")
+            # Return the message ID from the response
+            return response_data.get("messages", [{}])[0].get("id")
+        else:
+            print(f"Error sending WhatsApp reminder: {response_data}")
+            return None
+    except Exception as e:
+        print(f"Error sending WhatsApp reminder: {str(e)}")
+        return None
+
+def check_upcoming_reminders():
+    """Check for reminders that are due in the next minute and send notifications"""
+    try:
+        # Get current time
+        now = datetime.now(timezone.utc)
+        one_minute_later = now + timedelta(minutes=1)
+        
+        # Format times for Supabase query
+        now_str = now.isoformat()
+        one_minute_later_str = one_minute_later.isoformat()
+        
+        # Query for reminders between now and 1 minute in the future
+        reminders_result = (
+            supabase.table("reminders")
+            .select("*, tasks(*)")
+            .gte("reminder_time", now_str)
+            .lt("reminder_time", one_minute_later_str)
+            .execute()
+        )
+        
+        reminders = reminders_result.data
+        
+        # Process each reminder
+        for reminder in reminders:
+            task = reminder.get("tasks", {})
+            if task and not task.get("completed", False):
+                print(f"Processing reminder for task: {task.get('title')}")
+                
+                # Get the task's phone number or use the default
+                recipient = task.get("phone_number", RECIPIENT_PHONE_NUMBER)
+                
+                # Send the WhatsApp reminder
+                send_whatsapp_reminder(
+                    task_title=task.get("title"),
+                    task_priority=task.get("priority"),
+                    due_time=datetime.fromisoformat(task.get("due_time")),
+                    recipient=recipient
+                )
+    except Exception as e:
+        print(f"Error checking upcoming reminders: {str(e)}")
 
 def get_reminder_suggestions(task_title: str, priority: str, due_date: str, created_at: str) -> List[datetime]:
     try:
@@ -124,6 +231,11 @@ async def create_task(task: Task):
             "due_time": task.due_time.isoformat(),
             "priority": task.priority
         }
+        
+        # Add phone number if provided
+        if task.phone_number:
+            task_data["phone_number"] = task.phone_number
+            
         task_result = supabase.table("tasks").insert(task_data).execute()
         task_id = task_result.data[0]['id']
         
@@ -224,13 +336,56 @@ async def delete_task(task_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# New endpoint to test WhatsApp notification
+@app.post("/api/test-whatsapp")
+async def test_whatsapp_message():
+    try:
+        # Always use the default number
+        recipient = RECIPIENT_PHONE_NUMBER
+        if not recipient:
+            raise HTTPException(status_code=400, detail="Default phone number not configured")
+            
+        message_id = send_whatsapp_reminder(
+            task_title="Test Reminder",
+            task_priority="Medium",
+            due_time=datetime.now(timezone.utc) + timedelta(hours=1),
+            recipient=recipient
+        )
+        
+        if message_id:
+            return {"message": "Test WhatsApp message sent successfully", "message_id": message_id, "to": recipient}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to send WhatsApp message")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Add a new endpoint for checking reminders with security
+@app.post("/api/check-reminders")
+async def check_reminders_endpoint(request: Request):
+    # Get verification token from environment
+    verify_token = os.getenv("VERIFY_TOKEN")
+    
+    # Get authorization header
+    auth_header = request.headers.get("Authorization")
+    
+    # Verify the token for security (ensure only the cron job can trigger this)
+    if verify_token and (not auth_header or auth_header != f"Bearer {verify_token}"):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    try:
+        check_upcoming_reminders()
+        return {"message": "Reminders checked successfully", "timestamp": datetime.now(timezone.utc).isoformat()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/")
 async def health_check():
     return {
         "status": "ok", 
         "message": "Task Reminder API is running",
         "supabase_configured": bool(supabase_url and supabase_key),
-        "openai_configured": bool(client.api_key)
+        "openai_configured": bool(client.api_key),
+        "meta_whatsapp_configured": bool(META_ACCESS_TOKEN and META_PHONE_NUMBER_ID)
     }
 
 if __name__ == "__main__":
@@ -238,4 +393,5 @@ if __name__ == "__main__":
     print(f"Supabase URL configured: {'Yes' if supabase_url else 'No'}")
     print(f"Supabase Key configured: {'Yes' if supabase_key else 'No'}")
     print(f"OpenAI API Key configured: {'Yes' if client.api_key else 'No'}")
+    print(f"Meta WhatsApp API configured: {'Yes' if META_ACCESS_TOKEN and META_PHONE_NUMBER_ID else 'No'}")
     uvicorn.run(app, host="0.0.0.0", port=8000) 
