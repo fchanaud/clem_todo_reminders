@@ -1,7 +1,28 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Get API URL with a more robust approach
+const getApiUrl = () => {
+  // Use the environment variable if available
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+  
+  // In the browser, if we're in production and no env var is set,
+  // construct the API URL from the current origin + known backend path
+  if (typeof window !== 'undefined') {
+    const currentOrigin = window.location.origin;
+    // If we're on the production frontend domain, use the production backend
+    if (currentOrigin.includes('clem-todo-frontend')) {
+      return 'https://clem-todo-backend.onrender.com';
+    }
+  }
+  
+  // Fallback to localhost for development
+  return 'http://localhost:8000';
+};
+
+const API_URL = getApiUrl();
 
 export default function TaskForm({ onTaskAdded }) {
   const [title, setTitle] = useState('');
