@@ -25,8 +25,10 @@ interface TaskListProps {
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export default function TaskList({ refreshTrigger }: TaskListProps) {
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [incompleteTasks, setIncompleteTasks] = useState<Task[]>([]);
+  const [completedTasks, setCompletedTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showCompleted, setShowCompleted] = useState(false);
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -43,12 +45,14 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
       
       // API returns { incomplete_tasks, completed_tasks } format
       if (data && data.incomplete_tasks && Array.isArray(data.incomplete_tasks)) {
-        setIncompleteTasks(data.incomplete_tasks);
-        setCompletedTasks(data.completed_tasks);
+        setIncompleteTasks(data.incomplete_tasks || []);
+        setCompletedTasks(data.completed_tasks || []);
       } else if (Array.isArray(data)) {
-        // Handle case where API returns array directly
-        setIncompleteTasks(data);
-        setCompletedTasks(data);
+        // For backward compatibility - split array data into incomplete and completed
+        const incomplete = data.filter(task => !task.completed);
+        const completed = data.filter(task => task.completed);
+        setIncompleteTasks(incomplete);
+        setCompletedTasks(completed);
       } else {
         console.error('Unexpected data format:', data);
         setIncompleteTasks([]);
@@ -77,7 +81,8 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
       if (!response.ok) {
         throw new Error('Failed to update task');
       }
-
+      
+      toast.success('Task completed!');
       fetchTasks(); // Refresh the task list
     } catch (error) {
       console.error('Error:', error);
@@ -94,7 +99,8 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
       if (!response.ok) {
         throw new Error('Failed to delete task');
       }
-
+      
+      toast.success('Task deleted successfully');
       fetchTasks(); // Refresh the task list
     } catch (error) {
       console.error('Error:', error);
@@ -117,13 +123,13 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
                 'bg-green-100 text-green-800'}`}>
               {task.priority}
             </span>
-            {task.reminders.length > 0 && (
+            {task.reminders && task.reminders.length > 0 && (
               <span className="text-xs text-gray-500">
                 {task.reminders.length} reminder{task.reminders.length > 1 ? 's' : ''}
               </span>
             )}
           </div>
-          {task.reminders.length > 0 && (
+          {task.reminders && task.reminders.length > 0 && (
             <div className="mt-2 space-y-1">
               {task.reminders.map((reminder) => (
                 <div key={reminder.id} className="text-xs text-gray-500">
@@ -172,7 +178,7 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
     );
   }
 
-  if (tasks.length === 0) {
+  if (incompleteTasks.length === 0 && completedTasks.length === 0) {
     return (
       <div className="p-4 text-center text-gray-500">
         No tasks found. Create one to get started!
@@ -187,11 +193,33 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
         <div>
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Active Tasks</h2>
           <div className="space-y-3">
-            {tasks.map((task) => (
+            {incompleteTasks.map((task) => (
               <TaskCard key={task.id} task={task} />
             ))}
           </div>
         </div>
+
+        {/* Completed Tasks */}
+        {completedTasks.length > 0 && (
+          <div className="mt-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">Completed Tasks</h2>
+              <button
+                onClick={() => setShowCompleted(!showCompleted)}
+                className="text-sm text-gray-600 hover:text-gray-900"
+              >
+                {showCompleted ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            {showCompleted && (
+              <div className="space-y-3">
+                {completedTasks.map((task) => (
+                  <TaskCard key={task.id} task={task} isCompleted />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
