@@ -31,15 +31,34 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
   const fetchTasks = async () => {
     setLoading(true);
     try {
+      console.log('Fetching from:', `${API_URL}/api/tasks`);
       const response = await fetch(`${API_URL}/api/tasks`);
       if (!response.ok) {
-        throw new Error('Failed to fetch tasks');
+        console.error('Response not OK:', response.status, response.statusText);
+        throw new Error(`Failed to fetch tasks: ${response.status}`);
       }
+      
       const data = await response.json();
-      setTasks(data);
+      console.log('Fetched data type:', typeof data, 'Data:', data);
+      
+      // API returns { incomplete_tasks, completed_tasks } format
+      if (data && data.incomplete_tasks && Array.isArray(data.incomplete_tasks)) {
+        setIncompleteTasks(data.incomplete_tasks);
+        setCompletedTasks(data.completed_tasks);
+      } else if (Array.isArray(data)) {
+        // Handle case where API returns array directly
+        setIncompleteTasks(data);
+        setCompletedTasks(data);
+      } else {
+        console.error('Unexpected data format:', data);
+        setIncompleteTasks([]);
+        setCompletedTasks([]);
+      }
     } catch (error) {
       console.error('Error:', error);
       toast.error('Failed to fetch tasks');
+      setIncompleteTasks([]);
+      setCompletedTasks([]);
     } finally {
       setLoading(false);
     }
