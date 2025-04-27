@@ -24,7 +24,8 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 if not supabase_url or not supabase_key:
     raise Exception(
         "Missing Supabase credentials. Please ensure NEXT_PUBLIC_SUPABASE_URL and "
-        "NEXT_PUBLIC_SUPABASE_ANON_KEY are set in your .env file"
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY are set in your .env file. "
+        f"Current values - URL: {supabase_url}, Key: {'*' * len(supabase_key) if supabase_key else 'None'}"
     )
 
 app = FastAPI()
@@ -41,17 +42,12 @@ app.add_middleware(
 
 # Initialize Supabase client
 try:
-    # First attempt with default options
     supabase: Client = create_client(supabase_url, supabase_key)
-except TypeError as e:
-    if 'proxy' in str(e):
-        # If error is related to proxy parameter, create with custom options
-        from supabase._sync.client import SyncClientOptions
-        options = SyncClientOptions()
-        supabase: Client = create_client(supabase_url, supabase_key, options=options)
-    else:
-        # Re-raise if it's a different error
-        raise
+except Exception as e:
+    print(f"Error initializing Supabase client: {e}")
+    print(f"Supabase URL: {supabase_url}")
+    print(f"Supabase Key Length: {len(supabase_key) if supabase_key else 'None'}")
+    raise
 
 class Reminder(BaseModel):
     reminder_time: datetime
