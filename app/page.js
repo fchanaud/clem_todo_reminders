@@ -1,9 +1,9 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
-import { Toaster } from 'react-hot-toast';
-import TaskForm from './components/TaskForm';
-import TaskList from './components/TaskList';
+import { useState, useEffect } from "react";
+import { Toaster } from "react-hot-toast";
+import TaskForm from "./components/TaskForm";
+import TaskList from "./components/TaskList";
 
 export default function Home() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -21,7 +21,7 @@ export default function Home() {
     <main className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-3xl mx-auto">
         <h1 className="text-4xl font-bold text-gray-900 mb-12 text-center">
-          Clem&apos;s TODO Reminders
+          Clem's TODO Reminders
         </h1>
         
         <div className="space-y-8">
