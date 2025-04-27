@@ -67,10 +67,6 @@ try:
     # Use a simple client creation without additional options
     supabase: Client = create_client(supabase_url, supabase_key)
 except Exception as e:
-    print(f"CRITICAL ERROR initializing Supabase client: {e}")
-    print(f"Supabase URL: {supabase_url}")
-    print(f"Supabase Key Length: {len(supabase_key) if supabase_key else 'None'}")
-    print(f"Full error traceback:", file=sys.stderr)
     import traceback
     traceback.print_exc(file=sys.stderr)
     raise
