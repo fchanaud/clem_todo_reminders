@@ -145,43 +145,50 @@ def send_whatsapp_reminder(task_title, task_priority, due_time, recipient=RECIPI
         return None
 
 def check_upcoming_reminders():
-    """Check for reminders in the current hour and send notifications"""
+    """Check for reminders that match the current hour in UK time"""
     try:
         # Get current time in UTC
-        now = datetime.now(timezone.utc)
+        now_utc = datetime.now(timezone.utc)
         
-        # Check if current time is within UK business hours (8am-8pm)
-        if not is_uk_business_hours(now):
-            print(f"Current time is outside UK business hours (8am-8pm). Skipping reminder check.")
-            return
-
-        # Get start and end of the current hour
-        start_of_hour = now.replace(minute=0, second=0, microsecond=0)
-        end_of_hour = start_of_hour + timedelta(hours=1)
+        # Determine if we're in British Summer Time
+        is_british_summer_time = is_bst(now_utc)
         
-        # Format times for Supabase query
-        start_of_hour_str = start_of_hour.isoformat()
-        end_of_hour_str = end_of_hour.isoformat()
+        # Convert to UK time
+        uk_offset = 1 if is_british_summer_time else 0
+        now_uk = now_utc + timedelta(hours=uk_offset)
         
-        print(f"Checking reminders between {start_of_hour_str} and {end_of_hour_str}")
+        print(f"Current time - UTC: {now_utc.isoformat()}, UK: {now_uk.isoformat()}, BST active: {is_british_summer_time}")
         
-        # Query for reminders in the current hour
+        # Get the start and end of the current UK hour
+        uk_hour_start = now_uk.replace(minute=0, second=0, microsecond=0)
+        uk_hour_end = uk_hour_start + timedelta(hours=1)
+        
+        # Convert back to UTC for database query
+        utc_hour_start = uk_hour_start - timedelta(hours=uk_offset)
+        utc_hour_end = uk_hour_end - timedelta(hours=uk_offset)
+        
+        print(f"Checking reminders for UK hour {uk_hour_start.hour}:00-{uk_hour_start.hour}:59")
+        print(f"UTC query range: {utc_hour_start.isoformat()} to {utc_hour_end.isoformat()}")
+        
+        # Query for reminders in the current UK hour (converted to UTC)
         reminders_result = (
             supabase.table("reminders")
             .select("*, tasks(*)")
-            .gte("reminder_time", start_of_hour_str)
-            .lt("reminder_time", end_of_hour_str)
+            .gte("reminder_time", utc_hour_start.isoformat())
+            .lt("reminder_time", utc_hour_end.isoformat())
             .execute()
         )
         
         reminders = reminders_result.data
-        print(f"Found {len(reminders)} reminders in the current hour")
+        print(f"Found {len(reminders)} reminders scheduled for this hour")
         
         # Process each reminder
         for reminder in reminders:
             task = reminder.get("tasks", {})
             if task and not task.get("completed", False):
-                print(f"Processing reminder for task: {task.get('title')}")
+                reminder_time = datetime.fromisoformat(reminder.get("reminder_time").replace('Z', '+00:00'))
+                
+                print(f"Processing reminder for task: {task.get('title')} at {reminder_time.isoformat()}")
                 
                 # Get the task's phone number or use the default
                 recipient = task.get("phone_number", RECIPIENT_PHONE_NUMBER)
@@ -190,51 +197,37 @@ def check_upcoming_reminders():
                 send_whatsapp_reminder(
                     task_title=task.get("title"),
                     task_priority=task.get("priority"),
-                    due_time=datetime.fromisoformat(task.get("due_time")),
+                    due_time=datetime.fromisoformat(task.get("due_time").replace('Z', '+00:00')),
                     recipient=recipient
                 )
     except Exception as e:
         print(f"Error checking upcoming reminders: {str(e)}")
 
-def is_uk_business_hours(utc_time):
-    """Check if the current UTC time is within UK business hours (8am-8pm)"""
-    try:
-        # Convert UTC to UK time
-        # UK is UTC+0 in winter and UTC+1 in summer (British Summer Time)
-        # We'll use a simple check for BST: from last Sunday in March to last Sunday in October
-        year = utc_time.year
+def is_bst(utc_time):
+    """Check if the current time is during British Summer Time"""
+    year = utc_time.year
+    
+    # Function to find the last Sunday in a given month and year
+    def last_sunday(year, month):
+        # Get the last day of the month
+        if month == 12:
+            last_day = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
+        else:
+            last_day = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
         
-        # Function to find the last Sunday in a given month and year
-        def last_sunday(year, month):
-            # Get the last day of the month
-            if month == 12:
-                last_day = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
-            else:
-                last_day = datetime(year, month + 1, 1, tzinfo=timezone.utc) - timedelta(days=1)
-            
-            # Find the last Sunday
-            offset = last_day.weekday()
-            if offset != 6:  # 6 is Sunday
-                last_day = last_day - timedelta(days=offset + 1)
-            
-            return last_day
+        # Find the last Sunday
+        offset = last_day.weekday()
+        if offset != 6:  # 6 is Sunday
+            last_day = last_day - timedelta(days=offset + 1)
         
-        # Calculate BST start and end for the current year
-        bst_start = last_sunday(year, 3).replace(hour=1)  # Last Sunday in March, 1am UTC
-        bst_end = last_sunday(year, 10).replace(hour=1)  # Last Sunday in October, 1am UTC
-        
-        # Determine if current time is during BST
-        is_bst = bst_start <= utc_time < bst_end
-        
-        # Apply offset based on whether it's BST or not
-        uk_time = utc_time + timedelta(hours=1) if is_bst else utc_time
-        
-        # Check if time is between 8am and 8pm UK time
-        return 8 <= uk_time.hour < 20
-    except Exception as e:
-        print(f"Error checking UK business hours: {str(e)}")
-        # Default to True to ensure reminders are sent in case of error
-        return True
+        return last_day
+    
+    # Calculate BST start and end for the current year
+    bst_start = last_sunday(year, 3).replace(hour=1)  # Last Sunday in March, 1am UTC
+    bst_end = last_sunday(year, 10).replace(hour=1)  # Last Sunday in October, 1am UTC
+    
+    # Determine if current time is during BST
+    return bst_start <= utc_time < bst_end
 
 def get_reminder_suggestions(task_title: str, priority: str, due_date: str, created_at: str) -> List[datetime]:
     try:
