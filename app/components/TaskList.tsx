@@ -25,14 +25,8 @@ interface TaskListProps {
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export default function TaskList({ refreshTrigger }: TaskListProps) {
-  const [incompleteTasks, setIncompleteTasks] = useState<Task[]>([]);
-  const [completedTasks, setCompletedTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showCompleted, setShowCompleted] = useState(false);
-
-  useEffect(() => {
-    fetchTasks();
-  }, [refreshTrigger]);
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -70,21 +64,24 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
     }
   };
 
+  useEffect(() => {
+    fetchTasks();
+  }, [refreshTrigger]);
+
   const handleComplete = async (taskId: string) => {
     try {
       const response = await fetch(`${API_URL}/api/tasks/${taskId}/complete`, {
         method: 'PATCH',
       });
-      
+
       if (!response.ok) {
-        throw new Error('Failed to complete task');
+        throw new Error('Failed to update task');
       }
-      
-      toast.success('Task completed!');
-      fetchTasks(); // Refresh the task lists
+
+      fetchTasks(); // Refresh the task list
     } catch (error) {
-      console.error('Error completing task:', error);
-      toast.error('Failed to complete task');
+      console.error('Error:', error);
+      toast.error('Failed to update task');
     }
   };
 
@@ -93,15 +90,14 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
       const response = await fetch(`${API_URL}/api/tasks/${taskId}`, {
         method: 'DELETE',
       });
-      
+
       if (!response.ok) {
         throw new Error('Failed to delete task');
       }
-      
-      toast.success('Task deleted successfully');
-      fetchTasks();
+
+      fetchTasks(); // Refresh the task list
     } catch (error) {
-      console.error('Error deleting task:', error);
+      console.error('Error:', error);
       toast.error('Failed to delete task');
     }
   };
@@ -176,7 +172,7 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
     );
   }
 
-  if (incompleteTasks.length === 0 && completedTasks.length === 0) {
+  if (tasks.length === 0) {
     return (
       <div className="p-4 text-center text-gray-500">
         No tasks found. Create one to get started!
@@ -191,33 +187,11 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
         <div>
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Active Tasks</h2>
           <div className="space-y-3">
-            {incompleteTasks.map((task) => (
+            {tasks.map((task) => (
               <TaskCard key={task.id} task={task} />
             ))}
           </div>
         </div>
-
-        {/* Completed Tasks */}
-        {completedTasks.length > 0 && (
-          <div className="mt-8">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-gray-900">Completed Tasks</h2>
-              <button
-                onClick={() => setShowCompleted(!showCompleted)}
-                className="text-sm text-gray-600 hover:text-gray-900"
-              >
-                {showCompleted ? 'Hide' : 'Show'}
-              </button>
-            </div>
-            {showCompleted && (
-              <div className="space-y-3">
-                {completedTasks.map((task) => (
-                  <TaskCard key={task.id} task={task} isCompleted />
-                ))}
-              </div>
-            )}
-          </div>
-        )}
       </div>
     </div>
   );
