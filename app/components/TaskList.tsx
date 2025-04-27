@@ -22,6 +22,8 @@ interface TaskListProps {
   refreshTrigger: number;
 }
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 export default function TaskList({ refreshTrigger }: TaskListProps) {
   const [incompleteTasks, setIncompleteTasks] = useState<Task[]>([]);
   const [completedTasks, setCompletedTasks] = useState<Task[]>([]);
@@ -33,17 +35,36 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
   }, [refreshTrigger]);
 
   const fetchTasks = async () => {
+    setLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/api/tasks');
+      console.log('Fetching from:', `${API_URL}/api/tasks`);
+      const response = await fetch(`${API_URL}/api/tasks`);
       if (!response.ok) {
-        throw new Error('Failed to fetch tasks');
+        console.error('Response not OK:', response.status, response.statusText);
+        throw new Error(`Failed to fetch tasks: ${response.status}`);
       }
+      
       const data = await response.json();
-      setIncompleteTasks(data.incomplete_tasks);
-      setCompletedTasks(data.completed_tasks);
+      console.log('Fetched data type:', typeof data, 'Data:', data);
+      
+      // API returns { incomplete_tasks, completed_tasks } format
+      if (data && data.incomplete_tasks && Array.isArray(data.incomplete_tasks)) {
+        setIncompleteTasks(data.incomplete_tasks);
+        setCompletedTasks(data.completed_tasks);
+      } else if (Array.isArray(data)) {
+        // Handle case where API returns array directly
+        setIncompleteTasks(data);
+        setCompletedTasks(data);
+      } else {
+        console.error('Unexpected data format:', data);
+        setIncompleteTasks([]);
+        setCompletedTasks([]);
+      }
     } catch (error) {
-      console.error('Error fetching tasks:', error);
-      toast.error('Failed to load tasks');
+      console.error('Error:', error);
+      toast.error('Failed to fetch tasks');
+      setIncompleteTasks([]);
+      setCompletedTasks([]);
     } finally {
       setLoading(false);
     }
@@ -51,7 +72,7 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
 
   const handleComplete = async (taskId: string) => {
     try {
-      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}/complete`, {
+      const response = await fetch(`${API_URL}/api/tasks/${taskId}/complete`, {
         method: 'PATCH',
       });
       
@@ -69,7 +90,7 @@ export default function TaskList({ refreshTrigger }: TaskListProps) {
 
   const handleDelete = async (taskId: string) => {
     try {
-      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`, {
+      const response = await fetch(`${API_URL}/api/tasks/${taskId}`, {
         method: 'DELETE',
       });
       

@@ -32,14 +32,25 @@ app = FastAPI()
 # CORS middleware configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=["http://localhost:3000", "http://localhost:3001", "https://clem-todo-frontend.onrender.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Initialize Supabase client
-supabase: Client = create_client(supabase_url, supabase_key)
+try:
+    # First attempt with default options
+    supabase: Client = create_client(supabase_url, supabase_key)
+except TypeError as e:
+    if 'proxy' in str(e):
+        # If error is related to proxy parameter, create with custom options
+        from supabase._sync.client import SyncClientOptions
+        options = SyncClientOptions()
+        supabase: Client = create_client(supabase_url, supabase_key, options=options)
+    else:
+        # Re-raise if it's a different error
+        raise
 
 class Reminder(BaseModel):
     reminder_time: datetime
@@ -198,6 +209,15 @@ async def delete_task(task_id: str):
         return {"message": "Task and associated reminders deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/")
+async def health_check():
+    return {
+        "status": "ok", 
+        "message": "Task Reminder API is running",
+        "supabase_configured": bool(supabase_url and supabase_key),
+        "openai_configured": bool(client.api_key)
+    }
 
 if __name__ == "__main__":
     import uvicorn
