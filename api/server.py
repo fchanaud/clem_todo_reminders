@@ -35,11 +35,11 @@ load_dotenv()
 supabase_url = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
-# Meta WhatsApp Business API configuration
-META_API_VERSION = os.getenv("META_API_VERSION", "v18.0")
-META_PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
-META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN")
-RECIPIENT_PHONE_NUMBER = os.getenv("RECIPIENT_PHONE_NUMBER", "33668695116")  # Default to the fixed WhatsApp number
+# Twilio WhatsApp API configuration
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")  # Your Twilio WhatsApp number with whatsapp: prefix
+RECIPIENT_PHONE_NUMBER = os.getenv("RECIPIENT_PHONE_NUMBER")  # Default recipient phone number
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -69,7 +69,7 @@ try:
     # Print out environment variables for debugging
     print("Environment Variables:")
     for key, value in os.environ.items():
-        if key.startswith(('NEXT_PUBLIC_', 'SUPABASE_', 'OPENAI_', 'META_')):
+        if key.startswith(('NEXT_PUBLIC_', 'SUPABASE_', 'OPENAI_', 'TWILIO_')):
             print(f"{key}: {'*' * len(value) if value else 'None'}")
     
     # Print package versions for debugging
@@ -99,20 +99,26 @@ class Task(BaseModel):
     phone_number: Optional[str] = None
 
 def send_whatsapp_reminder(task_title, task_priority, due_time, recipient=RECIPIENT_PHONE_NUMBER):
-    """Send a WhatsApp message for a task reminder using Meta Cloud API"""
-    if not META_ACCESS_TOKEN or not META_PHONE_NUMBER_ID:
-        logger.warning("Meta WhatsApp API not configured, skipping WhatsApp notification")
+    """Send a WhatsApp message for a task reminder using Twilio API"""
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_PHONE_NUMBER:
+        logger.warning("Twilio WhatsApp API not configured, skipping WhatsApp notification")
         return None
     
     try:
-        # Ensure the recipient number has the correct format (remove any "whatsapp:" prefix)
-        if recipient.startswith("whatsapp:"):
-            recipient = recipient[9:]  # Remove "whatsapp:" prefix
-        
-        # Ensure the number starts with a + if not already
-        if not recipient.startswith("+"):
-            recipient = "+" + recipient
+        # Ensure the recipient number has the correct format (add "whatsapp:" prefix if not present)
+        if not recipient.startswith("whatsapp:"):
+            # Ensure the number starts with a + if not already
+            if not recipient.startswith("+"):
+                recipient = "+" + recipient
+            recipient = f"whatsapp:{recipient}"
             
+        # Ensure the sending number has the correct format
+        twilio_number = TWILIO_PHONE_NUMBER
+        if not twilio_number.startswith("whatsapp:"):
+            if not twilio_number.startswith("+"):
+                twilio_number = "+" + twilio_number
+            twilio_number = f"whatsapp:{twilio_number}"
+        
         # Format the due time for display
         due_time_str = due_time.strftime("%A, %B %d at %I:%M %p")
         
@@ -121,43 +127,21 @@ def send_whatsapp_reminder(task_title, task_priority, due_time, recipient=RECIPI
         
         logger.info(f"Preparing WhatsApp message: {message_body}")
         
-        # Meta WhatsApp API endpoint
-        url = f"https://graph.facebook.com/{META_API_VERSION}/{META_PHONE_NUMBER_ID}/messages"
+        # Import twilio here to avoid issues if it's not installed
+        from twilio.rest import Client
         
-        # Prepare the payload
-        payload = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": recipient,
-            "type": "text",
-            "text": {
-                "preview_url": False,
-                "body": message_body
-            }
-        }
+        # Create Twilio client
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
         
-        # Headers with the access token
-        headers = {
-            "Authorization": f"Bearer {META_ACCESS_TOKEN}",
-            "Content-Type": "application/json"
-        }
+        # Send the WhatsApp message
+        message = client.messages.create(
+            body=message_body,
+            from_=twilio_number,
+            to=recipient
+        )
         
-        # Log request details (but hide the token)
-        logger.info(f"WhatsApp API request to URL: {url}")
-        logger.info(f"WhatsApp API payload: {json.dumps(payload)}")
-        logger.info(f"WhatsApp API request headers: Authorization: Bearer ******, Content-Type: application/json")
-        
-        # Send the request
-        response = requests.post(url, json=payload, headers=headers)
-        response_data = response.json()
-        
-        if response.status_code == 200:
-            logger.info(f"WhatsApp reminder sent successfully: {json.dumps(response_data)}")
-            # Return the message ID from the response
-            return response_data.get("messages", [{}])[0].get("id")
-        else:
-            logger.error(f"Error sending WhatsApp reminder: Status {response.status_code}, Response: {json.dumps(response_data)}")
-            return None
+        logger.info(f"WhatsApp reminder sent successfully: {message.sid}")
+        return message.sid
     except Exception as e:
         logger.error(f"Error sending WhatsApp reminder: {str(e)}", exc_info=True)
         return None
@@ -336,22 +320,30 @@ def check_upcoming_reminders():
                 # Get the task's phone number or use the default
                 recipient = task.get("phone_number", RECIPIENT_PHONE_NUMBER)
                 print(f"  Sending to: {recipient}")
-                logger.info(f"Sending WhatsApp message to recipient: {recipient}")
+                logger.info(f"Sending reminder message to recipient: {recipient}")
                 
-                # Send the WhatsApp reminder
-                message_id = send_whatsapp_reminder(
-                    task_title=task.get("title"),
-                    task_priority=task.get("priority"),
-                    due_time=datetime.fromisoformat(task.get("due_time").replace('Z', '+00:00')),
-                    recipient=recipient
-                )
+                # Check if WhatsApp is configured
+                send_whatsapp = True if TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER else False
                 
-                if message_id:
-                    print(f"  ✅ Message sent successfully, ID: {message_id}")
-                    sent_count += 1
-                else:
-                    print(f"  ❌ Failed to send message")
-                logger.info(f"WhatsApp message sent with ID: {message_id}")
+                message_results = {}
+                
+                # Send WhatsApp reminder if configured
+                if send_whatsapp:
+                    whatsapp_message_id = send_whatsapp_reminder(
+                        task_title=task.get("title"),
+                        task_priority=task.get("priority"),
+                        due_time=datetime.fromisoformat(task.get("due_time").replace('Z', '+00:00')),
+                        recipient=recipient
+                    )
+                    
+                    if whatsapp_message_id:
+                        message_results["whatsapp"] = whatsapp_message_id
+                        print(f"  ✅ WhatsApp message sent successfully, ID: {whatsapp_message_id}")
+                        sent_count += 1
+                    else:
+                        print(f"  ❌ Failed to send WhatsApp message")
+                
+                logger.info(f"Reminder messages sent: {json.dumps(message_results)}")
             else:
                 reason = "Task already completed" if task and task.get("completed", False) else "Task not found"
                 print(f"  Skipping reminder {i+1}: {reason}")
@@ -666,7 +658,7 @@ async def health_check():
         "message": "Task Reminder API is running",
         "supabase_configured": bool(supabase_url and supabase_key),
         "openai_configured": bool(client.api_key),
-        "meta_whatsapp_configured": bool(META_ACCESS_TOKEN and META_PHONE_NUMBER_ID)
+        "twilio_whatsapp_configured": bool(TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER)
     }
 
 def execute_migration():
@@ -718,5 +710,5 @@ if __name__ == "__main__":
     print(f"Supabase URL configured: {'Yes' if supabase_url else 'No'}")
     print(f"Supabase Key configured: {'Yes' if supabase_key else 'No'}")
     print(f"OpenAI API Key configured: {'Yes' if client.api_key else 'No'}")
-    print(f"Meta WhatsApp API configured: {'Yes' if META_ACCESS_TOKEN and META_PHONE_NUMBER_ID else 'No'}")
+    print(f"Twilio WhatsApp API configured: {'Yes' if TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER else 'No'}")
     uvicorn.run(app, host="0.0.0.0", port=8000) 
