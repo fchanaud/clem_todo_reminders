@@ -38,6 +38,11 @@ TABLE_PREFIX = "dev_" if ENV == "development" else ""
 print(f"Using table prefix: '{TABLE_PREFIX}'")
 logger.info(f"Using table prefix: '{TABLE_PREFIX}'")
 
+# Define the task key used in database joins
+# This is used when parsing joined results from the database
+TASK_KEY = f"{TABLE_PREFIX}tasks"
+logger.info(f"Using task key in joins: '{TASK_KEY}'")
+
 # Load environment variables
 if ENV == "development":
     # Try to load from .env.development first, fall back to .env
@@ -334,7 +339,9 @@ def check_upcoming_reminders():
         if len(reminders) > 0:
             print(f"\nREMINDER DETAILS:")
             for i, reminder in enumerate(reminders):
-                task = reminder.get("tasks", {})
+                # Access task data using the defined task key constant
+                # This ensures we correctly handle both development and production environments
+                task = reminder.get(TASK_KEY, {})
                 reminder_time = datetime.fromisoformat(reminder.get("reminder_time").replace('Z', '+00:00'))
                 time_ago = now_utc - reminder_time
                 hours_ago = time_ago.total_seconds() / 3600
@@ -355,7 +362,8 @@ def check_upcoming_reminders():
             print(f"\nPROCESSING REMINDERS:")
             
         for i, reminder in enumerate(reminders):
-            task = reminder.get("tasks", {})
+            # Access task data using the defined task key constant
+            task = reminder.get(TASK_KEY, {})
             if task and not task.get("completed", False):
                 reminder_time = datetime.fromisoformat(reminder.get("reminder_time").replace('Z', '+00:00'))
                 
