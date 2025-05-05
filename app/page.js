@@ -8,10 +8,11 @@ import TaskList from "./components/TaskList";
 export default function Home() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  // Fetch tasks when the component mounts
-  useEffect(() => {
-    handleTaskAdded();
-  }, []);
+  // We don't need to fetch tasks when the component mounts
+  // This was causing an extra API call that duplicates what TaskList already does
+  // useEffect(() => {
+  //  handleTaskAdded();
+  // }, []);
 
   const handleTaskAdded = () => {
     setRefreshTrigger((prev) => prev + 1);

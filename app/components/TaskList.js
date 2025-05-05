@@ -34,15 +34,12 @@ export default function TaskList({ refreshTrigger }) {
   const fetchTasks = async () => {
     setLoading(true);
     try {
-      console.log('Fetching from:', `${API_URL}/api/tasks`);
       const response = await fetch(`${API_URL}/api/tasks`);
       if (!response.ok) {
-        console.error('Response not OK:', response.status, response.statusText);
         throw new Error(`Failed to fetch tasks: ${response.status}`);
       }
       
       const data = await response.json();
-      console.log('Fetched data type:', typeof data, 'Data:', data);
       
       // API returns { incomplete_tasks, completed_tasks } format
       if (data && data.incomplete_tasks && Array.isArray(data.incomplete_tasks)) {
@@ -60,7 +57,7 @@ export default function TaskList({ refreshTrigger }) {
         setCompletedTasks([]);
       }
     } catch (error) {
-      console.error('Error:', error);
+      console.error('Error fetching tasks:', error.message);
       toast.error('Failed to fetch tasks');
       setIncompleteTasks([]);
       setCompletedTasks([]);
@@ -84,9 +81,23 @@ export default function TaskList({ refreshTrigger }) {
       }
       
       toast.success('Task completed!');
-      fetchTasks(); // Refresh the task list
+      
+      // Update state locally instead of refetching
+      const task = incompleteTasks.find(t => t.id === taskId);
+      if (task) {
+        // Remove from incomplete tasks
+        setIncompleteTasks(prev => prev.filter(t => t.id !== taskId));
+        
+        // Add to completed tasks with completed_at field
+        const completedTask = {
+          ...task,
+          completed: true,
+          completed_at: new Date().toISOString()
+        };
+        setCompletedTasks(prev => [completedTask, ...prev]);
+      }
     } catch (error) {
-      console.error('Error:', error);
+      console.error('Error completing task:', error.message);
       toast.error('Failed to update task');
     }
   };
@@ -102,9 +113,12 @@ export default function TaskList({ refreshTrigger }) {
       }
       
       toast.success('Task deleted successfully');
-      fetchTasks(); // Refresh the task list
+      
+      // Update state locally instead of refetching
+      setIncompleteTasks(prev => prev.filter(t => t.id !== taskId));
+      setCompletedTasks(prev => prev.filter(t => t.id !== taskId));
     } catch (error) {
-      console.error('Error:', error);
+      console.error('Error deleting task:', error.message);
       toast.error('Failed to delete task');
     }
   };

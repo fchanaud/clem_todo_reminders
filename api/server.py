@@ -218,18 +218,40 @@ def check_upcoming_reminders():
         """
         print(f"  Query (simplified): {query}")
         
-        reminders_result = (
-            supabase.table("reminders")
-            .select("*, tasks(*)")
-            .gte("reminder_time", utc_hour_start.isoformat())
-            .lt("reminder_time", utc_hour_end.isoformat())
-            .execute()
-        )
-        
-        reminders = reminders_result.data
-        print(f"\nRESULTS:")
-        print(f"  Found {len(reminders)} reminders in the catchup window")
-        logger.info(f"Found {len(reminders)} reminders in the catchup window")
+        try:
+            reminders_result = (
+                supabase.table("reminders")
+                .select("*, tasks(*)")
+                .gte("reminder_time", utc_hour_start.isoformat())
+                .lt("reminder_time", utc_hour_end.isoformat())
+                .execute()
+            )
+            
+            reminders = reminders_result.data
+            print(f"\nRESULTS:")
+            print(f"  Found {len(reminders)} reminders in the catchup window")
+            logger.info(f"Found {len(reminders)} reminders in the catchup window")
+        except Exception as query_error:
+            # Handle the case when the reminders table doesn't exist
+            error_str = str(query_error)
+            if "relation \"public.reminders\" does not exist" in error_str:
+                print("  Error: Reminders table doesn't exist yet. Creating it...")
+                logger.error("Reminders table doesn't exist yet.")
+                
+                # Create the reminders table
+                try:
+                    execute_migration()
+                except Exception as migration_error:
+                    print(f"  ❌ Failed to create reminders table: {str(migration_error)}")
+                    logger.error(f"Failed to create reminders table: {str(migration_error)}")
+                
+                # No reminders to process this time
+                reminders = []
+            else:
+                # Re-raise other errors
+                print(f"  ❌ Error querying reminders: {error_str}")
+                logger.error(f"Error querying reminders: {error_str}")
+                raise query_error
         
         # Add a processed status tracker to avoid duplicate notifications
         # Check last processed reminder time in database
@@ -428,12 +450,19 @@ async def create_task(task: Task):
             "priority": task.priority
         }
         
-        # Add phone number if provided
+        # Add phone number if provided (optional now)
         if task.phone_number:
             task_data["phone_number"] = task.phone_number
             
         task_result = supabase.table("tasks").insert(task_data).execute()
         task_id = task_result.data[0]['id']
+        
+        # Make sure the reminders table exists
+        try:
+            execute_migration()
+        except Exception as migration_error:
+            logger.error(f"Error running migration: {str(migration_error)}")
+            # Continue with task creation even if migration fails
         
         if task.single_reminder:
             # Calculate single reminder time
@@ -509,10 +538,29 @@ async def get_tasks():
         priority_order = {"High": 0, "Medium": 1, "Low": 2}
         incomplete_tasks.sort(key=lambda x: (x["due_time"], priority_order.get(x["priority"], 3)))
 
-        # Fetch reminders for all tasks
+        # Get all task IDs
+        all_task_ids = [task["id"] for task in incomplete_tasks + completed_tasks]
+        
+        # Fetch reminders for all tasks in a single query if there are any tasks
+        all_reminders = {}
+        if all_task_ids:
+            try:
+                reminders_result = supabase.table("reminders").select("*").in_("task_id", all_task_ids).execute()
+                
+                # Group reminders by task_id for easier assignment
+                for reminder in reminders_result.data:
+                    task_id = reminder["task_id"]
+                    if task_id not in all_reminders:
+                        all_reminders[task_id] = []
+                    all_reminders[task_id].append(reminder)
+            except Exception as reminder_error:
+                # Handle the case when reminders table doesn't exist
+                logger.error(f"Error fetching reminders: {str(reminder_error)}")
+                # Continue without reminders if there's an error
+        
+        # Assign reminders to each task
         for task in incomplete_tasks + completed_tasks:
-            reminders_result = supabase.table("reminders").select("*").eq("task_id", task["id"]).execute()
-            task["reminders"] = reminders_result.data
+            task["reminders"] = all_reminders.get(task["id"], [])
 
         return {
             "incomplete_tasks": incomplete_tasks,
@@ -597,6 +645,20 @@ async def check_reminders_endpoint(request: Request):
         logger.error(f"Error in check-reminders endpoint: {error_msg}", exc_info=True)
         raise HTTPException(status_code=500, detail=error_msg)
 
+@app.on_event("startup")
+async def startup_event():
+    """Run database migrations on startup"""
+    try:
+        logger.info("Running database migrations...")
+        
+        # Create the reminders table if it doesn't exist
+        execute_migration()
+            
+        logger.info("Database migrations completed")
+    except Exception as e:
+        logger.error(f"Error running migrations: {str(e)}")
+        # Don't fail startup if migrations fail
+
 @app.get("/")
 async def health_check():
     return {
@@ -606,6 +668,50 @@ async def health_check():
         "openai_configured": bool(client.api_key),
         "meta_whatsapp_configured": bool(META_ACCESS_TOKEN and META_PHONE_NUMBER_ID)
     }
+
+def execute_migration():
+    """Helper function to execute the reminders table migration"""
+    # Determine the migration file path based on environment
+    migration_paths = [
+        "api/migrations/create_reminders_table.sql",  # From project root
+        "migrations/create_reminders_table.sql",      # From api directory
+        "./migrations/create_reminders_table.sql",    # Explicitly relative
+        "/app/api/migrations/create_reminders_table.sql"  # Absolute path for containerized environments
+    ]
+    
+    # Try each path until one works
+    for path in migration_paths:
+        try:
+            if os.path.exists(path):
+                with open(path) as f:
+                    migration_sql = f.read()
+                    supabase.query(migration_sql).execute()
+                logger.info(f"Applied create_reminders_table migration from path: {path}")
+                return True
+        except Exception as path_error:
+            logger.warning(f"Could not apply migration from path {path}: {str(path_error)}")
+    
+    # As a last resort, use the SQL directly
+    try:
+        logger.warning("Using hardcoded SQL for migrations as file could not be read")
+        migration_sql = """
+        -- Create reminders table if it doesn't exist
+        CREATE TABLE IF NOT EXISTS public.reminders (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            task_id UUID REFERENCES tasks(id) ON DELETE CASCADE,
+            reminder_time TIMESTAMP WITH TIME ZONE NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        -- Create index for faster lookups if it doesn't exist
+        CREATE INDEX IF NOT EXISTS idx_reminders_task_id ON public.reminders(task_id);
+        """
+        supabase.query(migration_sql).execute()
+        logger.info("Applied create_reminders_table migration from hardcoded SQL")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to apply migration: {str(e)}")
+        return False
 
 if __name__ == "__main__":
     import uvicorn

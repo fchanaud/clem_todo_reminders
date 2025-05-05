@@ -31,8 +31,6 @@ export default function TaskForm({ onTaskAdded }) {
   const [priority, setPriority] = useState('Medium');
   const [useSingleReminder, setUseSingleReminder] = useState(false);
   const [hoursBefore, setHoursBefore] = useState('2');
-  const [phoneNumber, setPhoneNumber] = useState('+33668695116');
-  const [enableWhatsApp, setEnableWhatsApp] = useState(true);
 
   const capitalizeFirstLetter = (string) => {
     return string.charAt(0).toUpperCase() + string.slice(1);
@@ -57,9 +55,6 @@ export default function TaskForm({ onTaskAdded }) {
         requestBody.hours_before = parseInt(hoursBefore);
       }
 
-      // Always add the WhatsApp number - Meta API format (no "whatsapp:" prefix)
-      requestBody.phone_number = phoneNumber.startsWith('+') ? phoneNumber : '+' + phoneNumber;
-
       const response = await fetch(`${API_URL}/api/tasks`, {
         method: 'POST',
         headers: {
@@ -79,7 +74,6 @@ export default function TaskForm({ onTaskAdded }) {
       setPriority('Medium');
       setUseSingleReminder(false);
       setHoursBefore('2');
-      // Keep phone number and WhatsApp preference for next tasks
       onTaskAdded();
     } catch (error) {
       toast.error('Failed to create task');
@@ -194,34 +188,6 @@ export default function TaskForm({ onTaskAdded }) {
               </select>
             </div>
           )}
-        </div>
-
-        {/* WhatsApp Reminder Section */}
-        <div className="sm:col-span-3 pt-2 border-t border-gray-100">
-          <div className="flex items-center space-x-2">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-600" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-            </svg>
-            <span className="text-base font-medium text-gray-700">
-              WhatsApp reminders enabled
-            </span>
-          </div>
-          
-          <div className="mt-3">
-            <label htmlFor="phoneNumber" className="block text-sm font-medium text-gray-700 mb-1">
-              WhatsApp phone number
-            </label>
-            <input
-              type="tel"
-              id="phoneNumber"
-              value={phoneNumber}
-              readOnly
-              className="form-input mt-1 block w-full rounded-lg border-gray-200 bg-gray-50 py-2 px-3 text-gray-700 shadow-sm"
-            />
-            <p className="mt-1 text-xs text-gray-500">
-              WhatsApp messages will be sent to this number
-            </p>
-          </div>
         </div>
       </div>
 
