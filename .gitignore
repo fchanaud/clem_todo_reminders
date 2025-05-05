@@ -44,6 +44,5 @@ venv/
 .env.development
 .env.production
 env.development
-env.development.example
 *.env
 test.env 
