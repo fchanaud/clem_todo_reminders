@@ -37,4 +37,13 @@ __pycache__/
 *.py[cod]
 *$py.class
 venv/
-.env 
+.venv/
+
+# Environment files
+.env
+.env.development
+.env.production
+env.development
+env.development.example
+*.env
+test.env 
