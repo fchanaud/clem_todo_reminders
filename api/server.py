@@ -28,18 +28,57 @@ print("="*80)
 print("SERVER STARTING - DEBUGGING ENABLED")
 print("="*80)
 
+# Determine environment
+ENV = os.getenv("ENV", "development").lower()
+print(f"Running in {ENV.upper()} environment")
+logger.info(f"Application environment: {ENV}")
+
+# Set table prefix based on environment
+TABLE_PREFIX = "dev_" if ENV == "development" else ""
+print(f"Using table prefix: '{TABLE_PREFIX}'")
+logger.info(f"Using table prefix: '{TABLE_PREFIX}'")
+
 # Load environment variables
-load_dotenv()
+if ENV == "development":
+    # Try to load from .env.development first, fall back to .env
+    if os.path.exists(".env.development"):
+        load_dotenv(".env.development")
+        print("Loaded configuration from .env.development")
+    else:
+        load_dotenv()
+        print("Loaded configuration from .env")
+else:
+    # Production environment
+    load_dotenv()
+    print("Loaded configuration from .env")
 
 # Get Supabase credentials with fallbacks
 supabase_url = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
+# For development, allow override of Supabase URL/key for testing
+if ENV == "development":
+    dev_supabase_url = os.getenv("DEV_SUPABASE_URL")
+    dev_supabase_key = os.getenv("DEV_SUPABASE_KEY")
+    
+    if dev_supabase_url and dev_supabase_key:
+        supabase_url = dev_supabase_url
+        supabase_key = dev_supabase_key
+        print("Using development Supabase database")
+        logger.info("Using development Supabase database configuration")
+
 # Twilio WhatsApp API configuration
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")  # Your Twilio WhatsApp number with whatsapp: prefix
-RECIPIENT_PHONE_NUMBER = os.getenv("RECIPIENT_PHONE_NUMBER")  # Default recipient phone number
+TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
+
+# Use the Twilio Sandbox number for WhatsApp when testing locally
+# The sandbox number is used when TWILIO_PHONE_NUMBER is not properly configured
+if not TWILIO_PHONE_NUMBER or not TWILIO_PHONE_NUMBER.startswith("whatsapp:"):
+    print("WARNING: Using Twilio Sandbox number for WhatsApp (whatsapp:+14155238886)")
+    TWILIO_PHONE_NUMBER = "whatsapp:+14155238886"  # Twilio Sandbox number
+    
+RECIPIENT_PHONE_NUMBER = os.getenv("RECIPIENT_PHONE_NUMBER", "33668695116")  # Default recipient phone number
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -69,7 +108,7 @@ try:
     # Print out environment variables for debugging
     print("Environment Variables:")
     for key, value in os.environ.items():
-        if key.startswith(('NEXT_PUBLIC_', 'SUPABASE_', 'OPENAI_', 'TWILIO_')):
+        if key.startswith(('NEXT_PUBLIC_', 'SUPABASE_', 'OPENAI_', 'TWILIO_', 'DEV_')):
             print(f"{key}: {'*' * len(value) if value else 'None'}")
     
     # Print package versions for debugging
@@ -81,6 +120,11 @@ try:
     # Create Supabase client without any extra options that might cause compatibility issues
     # Use a simple client creation without additional options
     supabase: Client = create_client(supabase_url, supabase_key)
+    
+    # Print which database we're connecting to (without revealing sensitive information)
+    db_type = "DEVELOPMENT" if ENV == "development" and os.getenv("DEV_SUPABASE_URL") else "PRODUCTION"
+    print(f"Connected to {db_type} database at {supabase_url[:30]}...")
+    logger.info(f"Connected to {db_type} database")
 except Exception as e:
     import traceback
     traceback.print_exc(file=sys.stderr)
@@ -105,6 +149,14 @@ def send_whatsapp_reminder(task_title, task_priority, due_time, recipient=RECIPI
         return None
     
     try:
+        # First try to import twilio - if this fails, we don't need to do any other processing
+        try:
+            from twilio.rest import Client
+            logger.info("Successfully imported Twilio module")
+        except ImportError:
+            logger.error("Failed to import Twilio module. Make sure it's installed with: pip install twilio")
+            return None
+        
         # Ensure the recipient number has the correct format (add "whatsapp:" prefix if not present)
         if not recipient.startswith("whatsapp:"):
             # Ensure the number starts with a + if not already
@@ -119,6 +171,14 @@ def send_whatsapp_reminder(task_title, task_priority, due_time, recipient=RECIPI
                 twilio_number = "+" + twilio_number
             twilio_number = f"whatsapp:{twilio_number}"
         
+        # Check if numbers are the same (Twilio error 63031)
+        if recipient == twilio_number:
+            logger.error(f"Error: Cannot send WhatsApp message - sender and recipient numbers are the same ({twilio_number})")
+            logger.error("This would cause Twilio error 63031: https://www.twilio.com/docs/errors/63031")
+            return None
+            
+        logger.info(f"Using formatted WhatsApp numbers - From: {twilio_number}, To: {recipient}")
+        
         # Format the due time for display
         due_time_str = due_time.strftime("%A, %B %d at %I:%M %p")
         
@@ -126,9 +186,6 @@ def send_whatsapp_reminder(task_title, task_priority, due_time, recipient=RECIPI
         message_body = f"🔔 Reminder: \"{task_title}\" is due on {due_time_str}\nPriority: {task_priority}"
         
         logger.info(f"Preparing WhatsApp message: {message_body}")
-        
-        # Import twilio here to avoid issues if it's not installed
-        from twilio.rest import Client
         
         # Create Twilio client
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -194,18 +251,18 @@ def check_upcoming_reminders():
         # Query for reminders within our range
         print(f"\nQUERYING DATABASE...")
         query = f"""
-            SELECT * FROM reminders
-            JOIN tasks ON reminders.task_id = tasks.id
+            SELECT * FROM {TABLE_PREFIX}reminders
+            JOIN {TABLE_PREFIX}tasks ON {TABLE_PREFIX}reminders.task_id = {TABLE_PREFIX}tasks.id
             WHERE reminder_time >= '{utc_hour_start.isoformat()}'
             AND reminder_time < '{utc_hour_end.isoformat()}'
-            AND tasks.completed = false
+            AND {TABLE_PREFIX}tasks.completed = false
         """
         print(f"  Query (simplified): {query}")
         
         try:
             reminders_result = (
-                supabase.table("reminders")
-                .select("*, tasks(*)")
+                supabase.table(f"{TABLE_PREFIX}reminders")
+                .select(f"*, {TABLE_PREFIX}tasks(*)")
                 .gte("reminder_time", utc_hour_start.isoformat())
                 .lt("reminder_time", utc_hour_end.isoformat())
                 .execute()
@@ -218,7 +275,7 @@ def check_upcoming_reminders():
         except Exception as query_error:
             # Handle the case when the reminders table doesn't exist
             error_str = str(query_error)
-            if "relation \"public.reminders\" does not exist" in error_str:
+            if f"relation \"public.{TABLE_PREFIX}reminders\" does not exist" in error_str:
                 print("  Error: Reminders table doesn't exist yet. Creating it...")
                 logger.error("Reminders table doesn't exist yet.")
                 
@@ -241,7 +298,7 @@ def check_upcoming_reminders():
         # Check last processed reminder time in database
         try:
             processed_status = (
-                supabase.table("app_status")
+                supabase.table(f"{TABLE_PREFIX}app_status")
                 .select("*")
                 .eq("name", "last_processed_time")
                 .execute()
@@ -256,7 +313,7 @@ def check_upcoming_reminders():
                 last_processed_time = default_time
                 print(f"  No last processed time found, defaulting to {catchup_hours} hours ago")
                 
-                supabase.table("app_status").insert({
+                supabase.table(f"{TABLE_PREFIX}app_status").insert({
                     "name": "last_processed_time",
                     "value": default_time.isoformat()
                 }).execute()
@@ -267,7 +324,7 @@ def check_upcoming_reminders():
             
             try:
                 # Try to create the table if it doesn't exist
-                supabase.table("app_status").insert({
+                supabase.table(f"{TABLE_PREFIX}app_status").insert({
                     "name": "last_processed_time",
                     "value": (now_utc - timedelta(hours=catchup_hours)).isoformat()
                 }).execute()
@@ -351,7 +408,7 @@ def check_upcoming_reminders():
         
         # Update the last processed time
         try:
-            supabase.table("app_status").update({"value": now_utc.isoformat()}).eq("name", "last_processed_time").execute()
+            supabase.table(f"{TABLE_PREFIX}app_status").update({"value": now_utc.isoformat()}).eq("name", "last_processed_time").execute()
             print(f"  Updated last processed time to: {now_utc.isoformat()}")
         except Exception as e:
             print(f"  Error updating last processed time: {str(e)}")
@@ -446,7 +503,7 @@ async def create_task(task: Task):
         if task.phone_number:
             task_data["phone_number"] = task.phone_number
             
-        task_result = supabase.table("tasks").insert(task_data).execute()
+        task_result = supabase.table(f"{TABLE_PREFIX}tasks").insert(task_data).execute()
         task_id = task_result.data[0]['id']
         
         # Make sure the reminders table exists
@@ -463,7 +520,7 @@ async def create_task(task: Task):
                 "task_id": task_id,
                 "reminder_time": reminder_time.isoformat()
             }
-            supabase.table("reminders").insert(reminder_data).execute()
+            supabase.table(f"{TABLE_PREFIX}reminders").insert(reminder_data).execute()
         else:
             # Get reminder suggestions from LLM
             reminder_times = get_reminder_suggestions(
@@ -479,7 +536,7 @@ async def create_task(task: Task):
                     "task_id": task_id,
                     "reminder_time": reminder_time.isoformat()
                 }
-                supabase.table("reminders").insert(reminder_data).execute()
+                supabase.table(f"{TABLE_PREFIX}reminders").insert(reminder_data).execute()
         
         return task_result.data[0]
     except Exception as e:
@@ -490,7 +547,7 @@ async def complete_task(task_id: str):
     try:
         # Update the task as completed
         result = (
-            supabase.table("tasks")
+            supabase.table(f"{TABLE_PREFIX}tasks")
             .update({
                 "completed": True,
                 "completed_at": datetime.now(timezone.utc).isoformat()
@@ -507,7 +564,7 @@ async def get_tasks():
     try:
         # Get incomplete tasks first, ordered by due_time and priority
         incomplete_tasks_result = (
-            supabase.table("tasks")
+            supabase.table(f"{TABLE_PREFIX}tasks")
             .select("*")
             .eq("completed", False)
             .order('due_time', desc=False)
@@ -517,7 +574,7 @@ async def get_tasks():
 
         # Get completed tasks, ordered by completion time
         completed_tasks_result = (
-            supabase.table("tasks")
+            supabase.table(f"{TABLE_PREFIX}tasks")
             .select("*")
             .eq("completed", True)
             .order('completed_at', desc=True)
@@ -537,7 +594,7 @@ async def get_tasks():
         all_reminders = {}
         if all_task_ids:
             try:
-                reminders_result = supabase.table("reminders").select("*").in_("task_id", all_task_ids).execute()
+                reminders_result = supabase.table(f"{TABLE_PREFIX}reminders").select("*").in_("task_id", all_task_ids).execute()
                 
                 # Group reminders by task_id for easier assignment
                 for reminder in reminders_result.data:
@@ -565,9 +622,9 @@ async def get_tasks():
 async def delete_task(task_id: str):
     try:
         # Delete associated reminders first
-        supabase.table("reminders").delete().eq("task_id", task_id).execute()
+        supabase.table(f"{TABLE_PREFIX}reminders").delete().eq("task_id", task_id).execute()
         # Then delete the task
-        result = supabase.table("tasks").delete().eq("id", task_id).execute()
+        result = supabase.table(f"{TABLE_PREFIX}tasks").delete().eq("id", task_id).execute()
         return {"message": "Task and associated reminders deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -579,8 +636,38 @@ async def test_whatsapp_message():
         # Always use the default number
         recipient = RECIPIENT_PHONE_NUMBER
         if not recipient:
-            raise HTTPException(status_code=400, detail="Default phone number not configured")
+            logger.error("Default recipient phone number not configured")
+            raise HTTPException(status_code=400, detail="Default recipient phone number not configured")
             
+        # Log Twilio configuration for debugging
+        logger.info(f"Twilio WhatsApp test configuration:")
+        logger.info(f"TWILIO_ACCOUNT_SID: {'Configured' if TWILIO_ACCOUNT_SID else 'Missing'}")
+        logger.info(f"TWILIO_AUTH_TOKEN: {'Configured' if TWILIO_AUTH_TOKEN else 'Missing'}")
+        logger.info(f"TWILIO_PHONE_NUMBER: {TWILIO_PHONE_NUMBER}")
+        logger.info(f"RECIPIENT_PHONE_NUMBER: {recipient}")
+        
+        # Ensure recipient isn't the same as sender (that would cause Twilio error 63031)
+        # Format both numbers to ensure proper comparison
+        twilio_number = TWILIO_PHONE_NUMBER
+        if not twilio_number.startswith("whatsapp:"):
+            if not twilio_number.startswith("+"):
+                twilio_number = "+" + twilio_number
+            twilio_number = f"whatsapp:{twilio_number}"
+            
+        formatted_recipient = recipient
+        if not formatted_recipient.startswith("whatsapp:"):
+            if not formatted_recipient.startswith("+"):
+                formatted_recipient = "+" + formatted_recipient
+            formatted_recipient = f"whatsapp:{formatted_recipient}"
+            
+        # Check if sending and receiving numbers are the same
+        if formatted_recipient == twilio_number:
+            logger.error(f"Error: Recipient number ({formatted_recipient}) cannot be the same as sender number ({twilio_number})")
+            logger.error(f"This would cause Twilio error 63031: https://www.twilio.com/docs/errors/63031")
+            raise HTTPException(status_code=400, detail="Recipient and sender numbers cannot be the same. Please use a different recipient number.")
+        
+        logger.info(f"Sending test WhatsApp message from {twilio_number} to {formatted_recipient}")
+        
         message_id = send_whatsapp_reminder(
             task_title="Test Reminder",
             task_priority="Medium",
@@ -589,11 +676,23 @@ async def test_whatsapp_message():
         )
         
         if message_id:
-            return {"message": "Test WhatsApp message sent successfully", "message_id": message_id, "to": recipient}
+            logger.info(f"Test WhatsApp message sent successfully with ID: {message_id}")
+            return {
+                "message": "Test WhatsApp message sent successfully", 
+                "message_id": message_id, 
+                "from": twilio_number,
+                "to": formatted_recipient
+            }
         else:
-            raise HTTPException(status_code=500, detail="Failed to send WhatsApp message")
+            logger.error("Failed to send WhatsApp message - no message ID returned")
+            raise HTTPException(status_code=500, detail="Failed to send WhatsApp message - check server logs")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        error_detail = str(e)
+        stack_trace = traceback.format_exc()
+        logger.error(f"Error in test_whatsapp_message: {error_detail}")
+        logger.error(f"Stack trace: {stack_trace}")
+        raise HTTPException(status_code=500, detail=f"Error: {error_detail}")
 
 # Add a new endpoint for checking reminders with security
 @app.post("/api/check-reminders")
@@ -677,6 +776,10 @@ def execute_migration():
             if os.path.exists(path):
                 with open(path) as f:
                     migration_sql = f.read()
+                    # Replace table names with prefixed versions
+                    migration_sql = migration_sql.replace("public.reminders", f"public.{TABLE_PREFIX}reminders")
+                    migration_sql = migration_sql.replace("tasks(id)", f"{TABLE_PREFIX}tasks(id)")
+                    migration_sql = migration_sql.replace("idx_reminders_task_id", f"idx_{TABLE_PREFIX}reminders_task_id")
                     supabase.query(migration_sql).execute()
                 logger.info(f"Applied create_reminders_table migration from path: {path}")
                 return True
@@ -686,20 +789,34 @@ def execute_migration():
     # As a last resort, use the SQL directly
     try:
         logger.warning("Using hardcoded SQL for migrations as file could not be read")
-        migration_sql = """
+        migration_sql = f"""
         -- Create reminders table if it doesn't exist
-        CREATE TABLE IF NOT EXISTS public.reminders (
+        CREATE TABLE IF NOT EXISTS public.{TABLE_PREFIX}reminders (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-            task_id UUID REFERENCES tasks(id) ON DELETE CASCADE,
+            task_id UUID REFERENCES {TABLE_PREFIX}tasks(id) ON DELETE CASCADE,
             reminder_time TIMESTAMP WITH TIME ZONE NOT NULL,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
         
         -- Create index for faster lookups if it doesn't exist
-        CREATE INDEX IF NOT EXISTS idx_reminders_task_id ON public.reminders(task_id);
+        CREATE INDEX IF NOT EXISTS idx_{TABLE_PREFIX}reminders_task_id ON public.{TABLE_PREFIX}reminders(task_id);
         """
         supabase.query(migration_sql).execute()
-        logger.info("Applied create_reminders_table migration from hardcoded SQL")
+        
+        # Create app_status table as well
+        app_status_sql = f"""
+        -- Create app_status table if it doesn't exist
+        CREATE TABLE IF NOT EXISTS public.{TABLE_PREFIX}app_status (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name TEXT UNIQUE NOT NULL,
+            value TEXT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+        supabase.query(app_status_sql).execute()
+        
+        logger.info("Applied create_reminders_table and app_status migrations from hardcoded SQL")
         return True
     except Exception as e:
         logger.error(f"Failed to apply migration: {str(e)}")
@@ -711,4 +828,12 @@ if __name__ == "__main__":
     print(f"Supabase Key configured: {'Yes' if supabase_key else 'No'}")
     print(f"OpenAI API Key configured: {'Yes' if client.api_key else 'No'}")
     print(f"Twilio WhatsApp API configured: {'Yes' if TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER else 'No'}")
+    print("\nDatabase Configuration:")
+    print(f"- Environment: {ENV.upper()}")
+    print(f"- Database: {'DEVELOPMENT' if ENV == 'development' and os.getenv('DEV_SUPABASE_URL') else 'PRODUCTION'}")
+    print("\nServer Usage:")
+    print("- Development mode (dev database): python server.py")
+    print("- Production mode (prod database): ENV=production python server.py")
+    print("\nSetup Instructions:")
+    print("- For local development setup instructions, see: LOCAL_DEV_SETUP.md")
     uvicorn.run(app, host="0.0.0.0", port=8000) 
