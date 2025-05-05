@@ -1,7 +1,8 @@
 fastapi==0.109.2
 uvicorn==0.27.1
 python-dotenv==1.0.1
-supabase==2.3.4
+supabase==2.3.3
+gotrue==2.10.0
 pydantic==2.6.1
 python-multipart==0.0.9
 httpx<0.25

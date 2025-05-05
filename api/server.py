@@ -111,7 +111,8 @@ try:
     
     # Create Supabase client without any extra options that might cause compatibility issues
     # Use a simple client creation without additional options
-    supabase: Client = create_client(supabase_url, supabase_key)
+    options = {}  # Define empty options object to avoid default proxy settings
+    supabase: Client = create_client(supabase_url, supabase_key, options)
     
     # Print which database we're connecting to (without revealing sensitive information)
     db_type = "DEVELOPMENT" if ENV == "development" and os.getenv("DEV_SUPABASE_URL") else "PRODUCTION"
