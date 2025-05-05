@@ -109,10 +109,24 @@ try:
     print(f"Supabase version: {getattr(supabase, '__version__', 'unknown')}")
     print(f"GoTrue version: {getattr(gotrue, '__version__', 'unknown')}")
     
-    # Create Supabase client without any extra options that might cause compatibility issues
-    # Use a simple client creation without additional options
-    options = {}  # Define empty options object to avoid default proxy settings
-    supabase: Client = create_client(supabase_url, supabase_key, options)
+    # Create Supabase client with compatible options based on version
+    supabase_version = getattr(supabase, '__version__', '0.0.0')
+    
+    # Handle options differently based on version
+    try:
+        if supabase_version >= '2.4.0':
+            # For newer versions, use ClientOptions
+            from supabase.lib.client_options import ClientOptions
+            options = ClientOptions()
+            supabase: Client = create_client(supabase_url, supabase_key, options)
+        else:
+            # For older versions, pass empty dict or no options
+            supabase: Client = create_client(supabase_url, supabase_key)
+    except Exception as e:
+        # Fallback to most basic client creation if either approach fails
+        print(f"Error creating Supabase client with options: {str(e)}")
+        print("Attempting to create client with default settings...")
+        supabase: Client = create_client(supabase_url, supabase_key)
     
     # Print which database we're connecting to (without revealing sensitive information)
     db_type = "DEVELOPMENT" if ENV == "development" and os.getenv("DEV_SUPABASE_URL") else "PRODUCTION"
