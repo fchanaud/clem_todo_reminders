@@ -1,6 +1,6 @@
 # Task Manager Web Application
 
-A simple, responsive task manager web application built with Next.js, Python, and Supabase.
+A simple, responsive task manager web application built with Next.js, Python, and Supabase. Includes reminders via Pushover notifications.
 
 ## Features
 
@@ -9,6 +9,7 @@ A simple, responsive task manager web application built with Next.js, Python, an
 - Delete tasks
 - Mobile-friendly interface
 - Real-time updates with Supabase
+- Push notifications for task reminders via Pushover
 
 ## Tech Stack
 
@@ -16,6 +17,7 @@ A simple, responsive task manager web application built with Next.js, Python, an
 - Backend: Python (FastAPI)
 - Database: Supabase
 - Styling: Tailwind CSS
+- Notifications: Pushover API
 
 ## Prerequisites
 
@@ -42,12 +44,18 @@ A simple, responsive task manager web application built with Next.js, Python, an
    NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
    ```
 
-5. Start the development server:
+5. For notifications, set up Pushover (see [PUSHOVER_SETUP.md](PUSHOVER_SETUP.md) for details):
+   ```
+   PUSHOVER_API_TOKEN=your_pushover_token
+   PUSHOVER_USER_KEY=your_pushover_key
+   ```
+
+6. Start the development server:
    ```bash
    npm run dev
    ```
 
-6. Start the Python backend:
+7. Start the Python backend:
    ```bash
    python api/server.py
    ```
@@ -68,7 +76,7 @@ A simple, responsive task manager web application built with Next.js, Python, an
 
 ## Database Schema
 
-The Supabase database contains a single `tasks` table with the following schema:
+The Supabase database contains a `tasks` table and a `reminders` table with the following schema:
 
 ```sql
 create table tasks (
@@ -76,6 +84,15 @@ create table tasks (
   title text not null,
   due_time timestamp with time zone not null,
   priority text not null,
+  created_at timestamp with time zone default now(),
+  completed boolean default false,
+  phone_number text
+);
+
+create table reminders (
+  id uuid default uuid_generate_v4() primary key,
+  task_id uuid references tasks(id) on delete cascade,
+  reminder_time timestamp with time zone not null,
   created_at timestamp with time zone default now()
 );
 ```
@@ -99,6 +116,8 @@ Deploy to Render:
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `OPENAI_API_KEY`
+   - `PUSHOVER_API_TOKEN`
+   - `PUSHOVER_USER_KEY`
 
 ### Frontend (Next.js)
 
@@ -129,6 +148,8 @@ Deploy to Render:
    NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
    NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_key
    OPENAI_API_KEY=your_openai_key
+   PUSHOVER_API_TOKEN=your_pushover_token
+   PUSHOVER_USER_KEY=your_pushover_key
    ```
 5. Start the development servers:
    ```

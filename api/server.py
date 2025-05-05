@@ -67,18 +67,10 @@ if ENV == "development":
         print("Using development Supabase database")
         logger.info("Using development Supabase database configuration")
 
-# Twilio WhatsApp API configuration
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
-
-# Use the Twilio Sandbox number for WhatsApp when testing locally
-# The sandbox number is used when TWILIO_PHONE_NUMBER is not properly configured
-if not TWILIO_PHONE_NUMBER or not TWILIO_PHONE_NUMBER.startswith("whatsapp:"):
-    print("WARNING: Using Twilio Sandbox number for WhatsApp (whatsapp:+14155238886)")
-    TWILIO_PHONE_NUMBER = "whatsapp:+14155238886"  # Twilio Sandbox number
-    
-RECIPIENT_PHONE_NUMBER = os.getenv("RECIPIENT_PHONE_NUMBER", "33668695116")  # Default recipient phone number
+# Pushover API configuration
+PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN")
+PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY")
+RECIPIENT_USER_KEY = os.getenv("RECIPIENT_USER_KEY", PUSHOVER_USER_KEY)  # Default recipient user key
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -108,7 +100,7 @@ try:
     # Print out environment variables for debugging
     print("Environment Variables:")
     for key, value in os.environ.items():
-        if key.startswith(('NEXT_PUBLIC_', 'SUPABASE_', 'OPENAI_', 'TWILIO_', 'DEV_')):
+        if key.startswith(('NEXT_PUBLIC_', 'SUPABASE_', 'OPENAI_', 'PUSHOVER_', 'DEV_')):
             print(f"{key}: {'*' * len(value) if value else 'None'}")
     
     # Print package versions for debugging
@@ -142,42 +134,15 @@ class Task(BaseModel):
     hours_before: Optional[int] = None
     phone_number: Optional[str] = None
 
-def send_whatsapp_reminder(task_title, task_priority, due_time, recipient=RECIPIENT_PHONE_NUMBER):
-    """Send a WhatsApp message for a task reminder using Twilio API"""
-    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_PHONE_NUMBER:
-        logger.warning("Twilio WhatsApp API not configured, skipping WhatsApp notification")
+def send_pushover_notification(task_title, task_priority, due_time, recipient=RECIPIENT_USER_KEY):
+    """Send a Pushover notification for a task reminder"""
+    if not PUSHOVER_API_TOKEN or not PUSHOVER_USER_KEY:
+        logger.warning("Pushover API not configured, skipping notification")
         return None
     
     try:
-        # First try to import twilio - if this fails, we don't need to do any other processing
-        try:
-            from twilio.rest import Client
-            logger.info("Successfully imported Twilio module")
-        except ImportError:
-            logger.error("Failed to import Twilio module. Make sure it's installed with: pip install twilio")
-            return None
-        
-        # Ensure the recipient number has the correct format (add "whatsapp:" prefix if not present)
-        if not recipient.startswith("whatsapp:"):
-            # Ensure the number starts with a + if not already
-            if not recipient.startswith("+"):
-                recipient = "+" + recipient
-            recipient = f"whatsapp:{recipient}"
-            
-        # Ensure the sending number has the correct format
-        twilio_number = TWILIO_PHONE_NUMBER
-        if not twilio_number.startswith("whatsapp:"):
-            if not twilio_number.startswith("+"):
-                twilio_number = "+" + twilio_number
-            twilio_number = f"whatsapp:{twilio_number}"
-        
-        # Check if numbers are the same (Twilio error 63031)
-        if recipient == twilio_number:
-            logger.error(f"Error: Cannot send WhatsApp message - sender and recipient numbers are the same ({twilio_number})")
-            logger.error("This would cause Twilio error 63031: https://www.twilio.com/docs/errors/63031")
-            return None
-            
-        logger.info(f"Using formatted WhatsApp numbers - From: {twilio_number}, To: {recipient}")
+        import requests
+        logger.info("Preparing to send Pushover notification")
         
         # Format the due time for display
         due_time_str = due_time.strftime("%A, %B %d at %I:%M %p")
@@ -185,22 +150,37 @@ def send_whatsapp_reminder(task_title, task_priority, due_time, recipient=RECIPI
         # Create a message with task details
         message_body = f"🔔 Reminder: \"{task_title}\" is due on {due_time_str}\nPriority: {task_priority}"
         
-        logger.info(f"Preparing WhatsApp message: {message_body}")
+        logger.info(f"Preparing Pushover message: {message_body}")
         
-        # Create Twilio client
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        # Set the recipient to the default if not specified
+        user_key = recipient or PUSHOVER_USER_KEY
         
-        # Send the WhatsApp message
-        message = client.messages.create(
-            body=message_body,
-            from_=twilio_number,
-            to=recipient
+        # Send the Pushover notification
+        response = requests.post(
+            "https://api.pushover.net/1/messages.json",
+            data={
+                "token": PUSHOVER_API_TOKEN,
+                "user": user_key,
+                "message": message_body,
+                "title": "Todo Reminder",
+                "priority": 1 if task_priority == "High" else 0,  # Higher priority for high-priority tasks
+            }
         )
         
-        logger.info(f"WhatsApp reminder sent successfully: {message.sid}")
-        return message.sid
+        # Check response
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("status") == 1:
+                message_id = result.get("request")
+                logger.info(f"Pushover notification sent successfully: {message_id}")
+                return message_id
+        
+        # If we get here, there was an error
+        error_message = f"Error sending Pushover notification: {response.text}"
+        logger.error(error_message)
+        return None
     except Exception as e:
-        logger.error(f"Error sending WhatsApp reminder: {str(e)}", exc_info=True)
+        logger.error(f"Error sending Pushover notification: {str(e)}", exc_info=True)
         return None
 
 def check_upcoming_reminders():
@@ -375,30 +355,30 @@ def check_upcoming_reminders():
                 logger.info(f"Task details: {json.dumps(task, default=str)}")
                 
                 # Get the task's phone number or use the default
-                recipient = task.get("phone_number", RECIPIENT_PHONE_NUMBER)
+                recipient = task.get("phone_number", RECIPIENT_USER_KEY)
                 print(f"  Sending to: {recipient}")
                 logger.info(f"Sending reminder message to recipient: {recipient}")
                 
-                # Check if WhatsApp is configured
-                send_whatsapp = True if TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER else False
+                # Check if Pushover is configured
+                send_pushover = True if PUSHOVER_API_TOKEN and PUSHOVER_USER_KEY else False
                 
                 message_results = {}
                 
-                # Send WhatsApp reminder if configured
-                if send_whatsapp:
-                    whatsapp_message_id = send_whatsapp_reminder(
+                # Send Pushover notification if configured
+                if send_pushover:
+                    pushover_message_id = send_pushover_notification(
                         task_title=task.get("title"),
                         task_priority=task.get("priority"),
                         due_time=datetime.fromisoformat(task.get("due_time").replace('Z', '+00:00')),
                         recipient=recipient
                     )
                     
-                    if whatsapp_message_id:
-                        message_results["whatsapp"] = whatsapp_message_id
-                        print(f"  ✅ WhatsApp message sent successfully, ID: {whatsapp_message_id}")
+                    if pushover_message_id:
+                        message_results["pushover"] = pushover_message_id
+                        print(f"  ✅ Pushover notification sent successfully, ID: {pushover_message_id}")
                         sent_count += 1
                     else:
-                        print(f"  ❌ Failed to send WhatsApp message")
+                        print(f"  ❌ Failed to send Pushover notification")
                 
                 logger.info(f"Reminder messages sent: {json.dumps(message_results)}")
             else:
@@ -629,46 +609,25 @@ async def delete_task(task_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# New endpoint to test WhatsApp notification
-@app.post("/api/test-whatsapp")
-async def test_whatsapp_message():
+# New endpoint to test Pushover notification
+@app.post("/api/test-pushover")
+async def test_pushover_message():
     try:
-        # Always use the default number
-        recipient = RECIPIENT_PHONE_NUMBER
+        # Always use the default user key
+        recipient = RECIPIENT_USER_KEY
         if not recipient:
-            logger.error("Default recipient phone number not configured")
-            raise HTTPException(status_code=400, detail="Default recipient phone number not configured")
+            logger.error("Default recipient user key not configured")
+            raise HTTPException(status_code=400, detail="Default recipient user key not configured")
             
-        # Log Twilio configuration for debugging
-        logger.info(f"Twilio WhatsApp test configuration:")
-        logger.info(f"TWILIO_ACCOUNT_SID: {'Configured' if TWILIO_ACCOUNT_SID else 'Missing'}")
-        logger.info(f"TWILIO_AUTH_TOKEN: {'Configured' if TWILIO_AUTH_TOKEN else 'Missing'}")
-        logger.info(f"TWILIO_PHONE_NUMBER: {TWILIO_PHONE_NUMBER}")
-        logger.info(f"RECIPIENT_PHONE_NUMBER: {recipient}")
+        # Log Pushover configuration for debugging
+        logger.info(f"Pushover test configuration:")
+        logger.info(f"PUSHOVER_API_TOKEN: {'Configured' if PUSHOVER_API_TOKEN else 'Missing'}")
+        logger.info(f"PUSHOVER_USER_KEY: {'Configured' if PUSHOVER_USER_KEY else 'Missing'}")
+        logger.info(f"RECIPIENT_USER_KEY: {'*****' + recipient[-5:] if recipient else 'Missing'}")
         
-        # Ensure recipient isn't the same as sender (that would cause Twilio error 63031)
-        # Format both numbers to ensure proper comparison
-        twilio_number = TWILIO_PHONE_NUMBER
-        if not twilio_number.startswith("whatsapp:"):
-            if not twilio_number.startswith("+"):
-                twilio_number = "+" + twilio_number
-            twilio_number = f"whatsapp:{twilio_number}"
-            
-        formatted_recipient = recipient
-        if not formatted_recipient.startswith("whatsapp:"):
-            if not formatted_recipient.startswith("+"):
-                formatted_recipient = "+" + formatted_recipient
-            formatted_recipient = f"whatsapp:{formatted_recipient}"
-            
-        # Check if sending and receiving numbers are the same
-        if formatted_recipient == twilio_number:
-            logger.error(f"Error: Recipient number ({formatted_recipient}) cannot be the same as sender number ({twilio_number})")
-            logger.error(f"This would cause Twilio error 63031: https://www.twilio.com/docs/errors/63031")
-            raise HTTPException(status_code=400, detail="Recipient and sender numbers cannot be the same. Please use a different recipient number.")
+        logger.info(f"Sending test Pushover notification to user key ending in {recipient[-5:] if recipient else 'Unknown'}")
         
-        logger.info(f"Sending test WhatsApp message from {twilio_number} to {formatted_recipient}")
-        
-        message_id = send_whatsapp_reminder(
+        message_id = send_pushover_notification(
             task_title="Test Reminder",
             task_priority="Medium",
             due_time=datetime.now(timezone.utc) + timedelta(hours=1),
@@ -676,21 +635,20 @@ async def test_whatsapp_message():
         )
         
         if message_id:
-            logger.info(f"Test WhatsApp message sent successfully with ID: {message_id}")
+            logger.info(f"Test Pushover notification sent successfully with ID: {message_id}")
             return {
-                "message": "Test WhatsApp message sent successfully", 
+                "message": "Test Pushover notification sent successfully", 
                 "message_id": message_id, 
-                "from": twilio_number,
-                "to": formatted_recipient
+                "to": recipient[-5:] if recipient else "Unknown"
             }
         else:
-            logger.error("Failed to send WhatsApp message - no message ID returned")
-            raise HTTPException(status_code=500, detail="Failed to send WhatsApp message - check server logs")
+            logger.error("Failed to send Pushover notification - no message ID returned")
+            raise HTTPException(status_code=500, detail="Failed to send Pushover notification - check server logs")
     except Exception as e:
         import traceback
         error_detail = str(e)
         stack_trace = traceback.format_exc()
-        logger.error(f"Error in test_whatsapp_message: {error_detail}")
+        logger.error(f"Error in test_pushover_message: {error_detail}")
         logger.error(f"Stack trace: {stack_trace}")
         raise HTTPException(status_code=500, detail=f"Error: {error_detail}")
 
@@ -757,7 +715,7 @@ async def health_check():
         "message": "Task Reminder API is running",
         "supabase_configured": bool(supabase_url and supabase_key),
         "openai_configured": bool(client.api_key),
-        "twilio_whatsapp_configured": bool(TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER)
+        "pushover_configured": bool(PUSHOVER_API_TOKEN and PUSHOVER_USER_KEY)
     }
 
 def execute_migration():
@@ -827,7 +785,7 @@ if __name__ == "__main__":
     print(f"Supabase URL configured: {'Yes' if supabase_url else 'No'}")
     print(f"Supabase Key configured: {'Yes' if supabase_key else 'No'}")
     print(f"OpenAI API Key configured: {'Yes' if client.api_key else 'No'}")
-    print(f"Twilio WhatsApp API configured: {'Yes' if TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER else 'No'}")
+    print(f"Pushover API configured: {'Yes' if PUSHOVER_API_TOKEN and PUSHOVER_USER_KEY else 'No'}")
     print("\nDatabase Configuration:")
     print(f"- Environment: {ENV.upper()}")
     print(f"- Database: {'DEVELOPMENT' if ENV == 'development' and os.getenv('DEV_SUPABASE_URL') else 'PRODUCTION'}")

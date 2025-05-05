@@ -3,8 +3,9 @@ services:
   - type: web
     name: clem-todo-frontend
     env: node
+    region: oregon
     plan: free
-    buildCommand: npm install --legacy-peer-deps && npm run build
+    buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
       - key: NEXT_PUBLIC_SUPABASE_URL
@@ -15,48 +16,37 @@ services:
         value: production
       - key: NEXT_PUBLIC_API_URL
         sync: false
+      - key: NODE_VERSION
+        value: 16.15.0
     autoDeploy: true
 
   # Backend FastAPI service
   - type: web
     name: clem-todo-backend
     env: python
+    region: oregon
     plan: free
-    buildCommand: cd api && pip install -r requirements.txt
-    startCommand: cd api && gunicorn server:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 30
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd api && uvicorn server:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: SUPABASE_URL
+      - key: NEXT_PUBLIC_SUPABASE_URL
         sync: false
-      - key: SUPABASE_KEY
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
         sync: false
       - key: OPENAI_API_KEY
         sync: false
-      - key: NEXT_PUBLIC_SUPABASE_URL
-        fromService:
-          name: clem-todo-frontend
-          type: web
-          envVarKey: NEXT_PUBLIC_SUPABASE_URL
-      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
-        fromService:
-          name: clem-todo-frontend
-          type: web
-          envVarKey: NEXT_PUBLIC_SUPABASE_ANON_KEY
-      - key: TWILIO_ACCOUNT_SID
-        sync: false
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
-      - key: TWILIO_FROM_NUMBER
-        sync: false
-      - key: TO_PHONE_NUMBER
-        sync: false
-      - key: META_PHONE_NUMBER_ID
-        sync: false
-      - key: META_ACCESS_TOKEN
-        sync: false
-      - key: META_API_VERSION
-        value: "v18.0"
-      - key: RECIPIENT_PHONE_NUMBER
-        value: "33668695116"
+      - key: ENV
+        value: production
+      - key: FRONTEND_URL
+        value: https://clem-todo-frontend.onrender.com
       - key: VERIFY_TOKEN
-        sync: false  # Security token for the cron job
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: PUSHOVER_API_TOKEN
+        sync: false
+      - key: PUSHOVER_USER_KEY
+        sync: false
+      - key: RECIPIENT_USER_KEY
+        sync: false
     autoDeploy: true 
