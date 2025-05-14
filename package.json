@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "generate-icons": "cd public/icons && node generate-icons.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.4",
@@ -22,8 +23,10 @@
   },
   "devDependencies": {
     "@types/react": "^18.2.0",
+    "canvas": "^2.11.2",
     "eslint": "^8.57.0",
     "eslint-config-next": "^14.2.28",
-    "typescript": "^5.3.2"
+    "typescript": "^5.3.2",
+    "worker-loader": "^3.0.8"
   }
 }

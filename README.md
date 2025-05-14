@@ -1,6 +1,6 @@
 # Task Manager Web Application
 
-A simple, responsive task manager web application built with Next.js, Python, and Supabase. Includes reminders via Pushover notifications.
+A simple, responsive task manager web application built with Next.js, Python, and Supabase. Includes reminders via Pushover notifications and PWA support for iPhone.
 
 ## Features
 
@@ -10,6 +10,7 @@ A simple, responsive task manager web application built with Next.js, Python, an
 - Mobile-friendly interface
 - Real-time updates with Supabase
 - Push notifications for task reminders via Pushover
+- Progressive Web App (PWA) support for iPhone and other devices
 
 ## Tech Stack
 
@@ -50,15 +51,39 @@ A simple, responsive task manager web application built with Next.js, Python, an
    PUSHOVER_USER_KEY=your_pushover_key
    ```
 
-6. Start the development server:
+6. Generate PWA icons (see [PWA_ICONS_GUIDE.md](PWA_ICONS_GUIDE.md) for details):
+   ```bash
+   npm install canvas   # Required for icon generation
+   npm run generate-icons
+   ```
+
+7. Start the development server:
    ```bash
    npm run dev
    ```
 
-7. Start the Python backend:
+8. Start the Python backend:
    ```bash
    python api/server.py
    ```
+
+## Using as a Progressive Web App (PWA)
+
+This application can be installed as a PWA on iOS and Android devices:
+
+### On iPhone:
+1. Open the app in Safari
+2. Tap the Share button at the bottom
+3. Scroll down and tap "Add to Home Screen"
+4. Name your app and tap "Add"
+
+### On Android:
+1. Open the app in Chrome
+2. Tap the three-dot menu
+3. Tap "Add to Home Screen"
+4. Follow the prompts
+
+The app will install on your home screen and can be launched like any native app, with full screen display and offline capabilities.
 
 ## Project Structure
 
@@ -71,6 +96,10 @@ A simple, responsive task manager web application built with Next.js, Python, an
 │   ├── server.py       # FastAPI server
 │   └── migrations/     # Database migrations
 ├── public/             # Static files
+│   ├── icons/          # PWA icons
+│   ├── manifest.webmanifest # PWA manifest
+│   ├── sw.js           # Service Worker
+│   └── offline.html    # Offline fallback page
 └── styles/            # CSS styles
 ```
 
@@ -102,6 +131,14 @@ create table app_status (
   value text not null,
   created_at timestamp with time zone default now(),
   updated_at timestamp with time zone default now()
+);
+
+create table processed_reminders (
+  id uuid default uuid_generate_v4() primary key,
+  reminder_id uuid references reminders(id) on delete cascade,
+  processed_at timestamp with time zone not null,
+  message_id text,
+  created_at timestamp with time zone default current_timestamp
 );
 ```
 
