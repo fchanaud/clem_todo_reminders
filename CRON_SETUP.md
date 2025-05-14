@@ -79,12 +79,6 @@ Render's free tier services spin down after 15 minutes of inactivity. This means
   - Verify the VERIFY_TOKEN matches between the backend and Cron Job
   - Ensure the backend URL is correct in the Cron Job command
 
-## Pricing Information
-
-- **Meta WhatsApp Business API**: First 1,000 conversations per month are FREE
-  - After 1,000 conversations: approximately $0.005-$0.03 per conversation
-  - Pricing varies by country and conversation type
-  - Much more cost-effective than Twilio for monthly usage
 
 - **Render Free Tier**:
   - Includes the Cron Job service at no additional cost
