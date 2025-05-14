@@ -21,27 +21,6 @@ export default function Home() {
   const fetchTasks = async () => {
     setLoading(true);
     try {
-      // Get API URL with a more robust approach
-      const getApiUrl = () => {
-        // Use the environment variable if available
-        if (process.env.NEXT_PUBLIC_API_URL) {
-          return process.env.NEXT_PUBLIC_API_URL;
-        }
-        
-        // In the browser, if we're in production and no env var is set,
-        // construct the API URL from the current origin + known backend path
-        if (typeof window !== 'undefined') {
-          const currentOrigin = window.location.origin;
-          // If we're on the production frontend domain, use the production backend
-          if (currentOrigin.includes('clem-todo-frontend')) {
-            return 'https://clem-todo-backend.onrender.com';
-          }
-        }
-        
-        // Fallback to localhost for development
-        return 'http://localhost:8000';
-      };
-      
       const apiUrl = getApiUrl();
       const response = await fetch(`${apiUrl}/api/tasks`);
       if (!response.ok) {
@@ -60,11 +39,32 @@ export default function Home() {
 
   const handleTaskAdded = async (newTask) => {
     if (newTask) {
-      // If we have the new task data, add it directly to state
-      setTasks(prevTasks => ({
-        ...prevTasks,
-        incomplete_tasks: [...prevTasks.incomplete_tasks, newTask]
-      }));
+      try {
+        // When a new task is created, fetch it with its reminders
+        const apiUrl = getApiUrl();
+        const response = await fetch(`${apiUrl}/api/tasks`);
+        
+        if (response.ok) {
+          const data = await response.json();
+          setTasks(data);
+        } else {
+          // If fetch fails, still add the task but without reminders
+          setTasks(prevTasks => ({
+            ...prevTasks,
+            incomplete_tasks: [...prevTasks.incomplete_tasks, newTask]
+          }));
+          console.warn('Could not fetch tasks with reminders after task creation');
+        }
+      } catch (error) {
+        // Fallback to just adding the task without fetching
+        console.error('Error fetching newly created task with reminders:', error);
+        setTasks(prevTasks => ({
+          ...prevTasks,
+          incomplete_tasks: [...prevTasks.incomplete_tasks, newTask]
+        }));
+      }
+      
+      // Signal that a task was added to trigger scrolling
       setTaskAdded(true);
     } else {
       // Fall back to refetching if no task data provided
@@ -73,39 +73,65 @@ export default function Home() {
     }
   };
 
+  // Function to get API URL - same as in other components
+  const getApiUrl = () => {
+    // Use the environment variable if available
+    if (process.env.NEXT_PUBLIC_API_URL) {
+      return process.env.NEXT_PUBLIC_API_URL;
+    }
+    
+    // In the browser, if we're in production and no env var is set,
+    // construct the API URL from the current origin + known backend path
+    if (typeof window !== 'undefined') {
+      const currentOrigin = window.location.origin;
+      // If we're on the production frontend domain, use the production backend
+      if (currentOrigin.includes('clem-todo-frontend')) {
+        return 'https://clem-todo-backend.onrender.com';
+      }
+    }
+    
+    // Fallback to localhost for development
+    return 'http://localhost:8000';
+  };
+
   // Enhanced scroll functionality for better compatibility with iOS PWA
   useEffect(() => {
     // Only attempt to scroll if a task was added
     if (taskAdded) {
-      try {
-        // First, try with smooth scrolling
-        if (listEndRef.current) {
-          console.log('Attempting to scroll to new task with smooth behavior');
-          listEndRef.current.scrollIntoView({ 
-            behavior: 'smooth', 
-            block: 'end'
-          });
-          
-          // Set a backup direct scroll in case smooth scrolling doesn't work properly on iOS
-          setTimeout(() => {
-            if (listEndRef.current) {
-              window.scrollTo(0, document.body.scrollHeight);
-              console.log('Executed backup scroll to end of page');
-            }
-          }, 300);
-        } else {
-          // Fallback to window scroll
-          console.log('listEndRef not available, using window.scrollTo');
+      // Add a small delay to ensure reminders are loaded before scrolling
+      const scrollTimeout = setTimeout(() => {
+        try {
+          // First, try with smooth scrolling
+          if (listEndRef.current) {
+            console.log('Attempting to scroll to new task with smooth behavior');
+            listEndRef.current.scrollIntoView({ 
+              behavior: 'smooth', 
+              block: 'end'
+            });
+            
+            // Set a backup direct scroll in case smooth scrolling doesn't work properly on iOS
+            setTimeout(() => {
+              if (listEndRef.current) {
+                window.scrollTo(0, document.body.scrollHeight);
+                console.log('Executed backup scroll to end of page');
+              }
+            }, 300);
+          } else {
+            // Fallback to window scroll
+            console.log('listEndRef not available, using window.scrollTo');
+            window.scrollTo(0, document.body.scrollHeight);
+          }
+        } catch (e) {
+          // Final fallback if all else fails
+          console.error('Error during scroll:', e);
           window.scrollTo(0, document.body.scrollHeight);
         }
-      } catch (e) {
-        // Final fallback if all else fails
-        console.error('Error during scroll:', e);
-        window.scrollTo(0, document.body.scrollHeight);
-      }
+        
+        // Reset taskAdded flag
+        setTaskAdded(false);
+      }, 500); // 500ms delay to allow reminders to load
       
-      // Reset taskAdded flag
-      setTaskAdded(false);
+      return () => clearTimeout(scrollTimeout);
     }
   }, [taskAdded, tasks]);
 
