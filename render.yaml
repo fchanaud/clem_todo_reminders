@@ -17,7 +17,7 @@ services:
       - key: NEXT_PUBLIC_API_URL
         sync: false
       - key: NODE_VERSION
-        value: 16.15.0
+        value: 18.17.0
     autoDeploy: true
 
   # Backend FastAPI service
@@ -35,8 +35,6 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
-      - key: ENV
-        value: production
       - key: FRONTEND_URL
         value: https://clem-todo-frontend.onrender.com
       - key: VERIFY_TOKEN

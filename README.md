@@ -38,7 +38,7 @@ A simple, responsive task manager web application built with Next.js, Python, an
    pip install -r requirements.txt
    ```
 
-4. Create a `.env.local` file in the root directory with your Supabase credentials:
+4. Create a `.env` file in the root directory with your Supabase credentials:
    ```
    NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
    NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
@@ -69,14 +69,14 @@ A simple, responsive task manager web application built with Next.js, Python, an
 │   └── page.tsx        # Main page
 ├── api/                # Python backend
 │   ├── server.py       # FastAPI server
-│   └── database.py     # Database operations
+│   └── migrations/     # Database migrations
 ├── public/             # Static files
 └── styles/            # CSS styles
 ```
 
 ## Database Schema
 
-The Supabase database contains a `tasks` table and a `reminders` table with the following schema:
+The Supabase database contains the following tables:
 
 ```sql
 create table tasks (
@@ -94,6 +94,14 @@ create table reminders (
   task_id uuid references tasks(id) on delete cascade,
   reminder_time timestamp with time zone not null,
   created_at timestamp with time zone default now()
+);
+
+create table app_status (
+  id uuid default uuid_generate_v4() primary key,
+  name text unique not null,
+  value text not null,
+  created_at timestamp with time zone default now(),
+  updated_at timestamp with time zone default now()
 );
 ```
 
@@ -143,7 +151,7 @@ Deploy to Render:
    ```
    NEXT_PUBLIC_API_URL=http://localhost:8000
    ```
-4. Create a `.env` file in the `/api` directory with:
+4. Create a `.env` file in the root directory with:
    ```
    NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
    NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_key
@@ -159,7 +167,7 @@ Deploy to Render:
 
 ## Troubleshooting
 
-If you encounter any issues with the Supabase client in production, make sure you're using the latest version of the Supabase Python library (2.15.0 or higher).
+If you encounter connection issues with Supabase, check your environment variables and ensure they are properly set in your Render deployment settings.
 
 The application is deployed at:
 - Frontend: https://clem-todo-frontend.onrender.com
