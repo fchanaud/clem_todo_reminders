@@ -19,6 +19,15 @@ def patched_init(self, *args, **kwargs):
     if 'proxy' in kwargs:
         print("Removing 'proxy' from httpx Client kwargs to prevent errors")
         del kwargs['proxy']
+    
+    # Disable HTTP/2 if h2 package is not available
+    try:
+        import h2
+        # h2 is available, we can use HTTP/2
+    except ImportError:
+        print("HTTP/2 support disabled - h2 package not available")
+        kwargs['http2'] = False
+    
     return original_init(self, *args, **kwargs)
 httpx.Client.__init__ = patched_init
 
@@ -100,7 +109,19 @@ try:
     print(f"GoTrue version: {getattr(gotrue, '__version__', 'unknown')}")
     
     # Create Supabase client with simple configuration
-    supabase: Client = create_client(supabase_url, supabase_key)
+    try:
+        # First try with default settings
+        supabase: Client = create_client(supabase_url, supabase_key)
+    except ImportError as e:
+        if "h2 package is not installed" in str(e):
+            print("ImportError: HTTP/2 package not available. Trying alternative client configuration...")
+            # Create a client options object with HTTP/2 disabled
+            from supabase.lib.client_options import ClientOptions
+            options = ClientOptions()
+            # Set HTTP/2 to False in client options
+            if hasattr(options, 'http_options'):
+                options.http_options.http2 = False
+            supabase: Client = create_client(supabase_url, supabase_key, options)
     
     print(f"Connected to database at {supabase_url[:30]}...")
     logger.info(f"Connected to database")
