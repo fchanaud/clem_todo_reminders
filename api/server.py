@@ -142,7 +142,7 @@ class Task(BaseModel):
     hours_before: Optional[int] = None
     phone_number: Optional[str] = None
 
-def send_pushover_notification(task_title, task_priority, due_time, recipient=RECIPIENT_USER_KEY):
+def send_pushover_notification(task_title, task_priority, due_time, reminder_time=None, recipient=RECIPIENT_USER_KEY):
     """Send a Pushover notification for a task reminder"""
     if not PUSHOVER_API_TOKEN or not PUSHOVER_USER_KEY:
         logger.warning("Pushover API not configured, skipping notification")
@@ -165,24 +165,46 @@ def send_pushover_notification(task_title, task_priority, due_time, recipient=RE
         time_zone_suffix = "BST" if is_british_summer_time else "GMT"
         due_time_str = f"{due_time_str} ({time_zone_suffix})"
         
+        # Check if this is an urgent reminder (reminder time is same as due time)
+        is_urgent = False
+        if reminder_time:
+            # Round to nearest minute to avoid second differences
+            rounded_reminder = reminder_time.replace(second=0, microsecond=0)
+            rounded_due = due_time.replace(second=0, microsecond=0)
+            is_urgent = rounded_reminder == rounded_due
+            
         # Create a message with task details
-        message_body = f"🔔 Reminder: \"{task_title}\" is due on {due_time_str}\nPriority: {task_priority}"
+        message_prefix = "🚨 URGENT: " if is_urgent else "🔔 Reminder: "
+        message_body = f"{message_prefix}\"{task_title}\" is due on {due_time_str}\nPriority: {task_priority}"
+        
+        if is_urgent:
+            message_body += "\n⚠️ This task is due now!"
         
         logger.info(f"Preparing Pushover message: {message_body}")
         
         # Set the recipient to the default if not specified
         user_key = recipient or PUSHOVER_USER_KEY
         
+        # Determine push priority based on urgency and task priority
+        push_priority = 2 if is_urgent else (1 if task_priority == "High" else 0)  # Emergency for urgent, high for high priority
+        
         # Send the Pushover notification
+        notification_data = {
+            "token": PUSHOVER_API_TOKEN,
+            "user": user_key,
+            "message": message_body,
+            "title": "Todo Reminder",
+            "priority": push_priority,
+        }
+        
+        # Add emergency parameters if it's an emergency priority (2)
+        if push_priority == 2:
+            notification_data["retry"] = 30  # Retry every 30 seconds
+            notification_data["expire"] = 3600  # Expire after 1 hour
+        
         response = requests.post(
             "https://api.pushover.net/1/messages.json",
-            data={
-                "token": PUSHOVER_API_TOKEN,
-                "user": user_key,
-                "message": message_body,
-                "title": "Todo Reminder",
-                "priority": 1 if task_priority == "High" else 0,  # Higher priority for high-priority tasks
-            }
+            data=notification_data
         )
         
         # Check response
@@ -418,6 +440,15 @@ CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_remi
                     print(f"  Sending to: {recipient}")
                     logger.info(f"Sending reminder message to recipient: {recipient}")
                     
+                    # Get the task's due time
+                    due_time = datetime.fromisoformat(task.get("due_time").replace('Z', '+00:00'))
+                    
+                    # Check if the reminder is exactly at the task's due time
+                    is_due_time_reminder = reminder_time.replace(second=0, microsecond=0) == due_time.replace(second=0, microsecond=0)
+                    if is_due_time_reminder:
+                        print(f"  ⚠️ This is an URGENT reminder - task is due now!")
+                        logger.info(f"URGENT reminder - task is due now at {reminder_time.isoformat()}")
+                    
                     # Check if Pushover is configured
                     send_pushover = True if PUSHOVER_API_TOKEN and PUSHOVER_USER_KEY else False
                     
@@ -428,7 +459,8 @@ CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_remi
                         pushover_message_id = send_pushover_notification(
                             task_title=task.get("title"),
                             task_priority=task.get("priority"),
-                            due_time=datetime.fromisoformat(task.get("due_time").replace('Z', '+00:00')),
+                            due_time=due_time,
+                            reminder_time=reminder_time,
                             recipient=recipient
                         )
                         
@@ -752,24 +784,42 @@ async def test_pushover_message():
         now_utc = datetime.now(timezone.utc)
         test_due_time = now_utc + timedelta(hours=1)
         
-        # Send the notification with UK time display
-        message_id = send_pushover_notification(
-            task_title="Test Reminder",
+        # Send a non-urgent notification
+        normal_message_id = send_pushover_notification(
+            task_title="Test Regular Reminder",
             task_priority="Medium",
             due_time=test_due_time,
+            reminder_time=now_utc,  # Current time as reminder time (not equal to due time)
             recipient=recipient
         )
         
-        if message_id:
+        # Also send an urgent notification (reminder time = due time)
+        urgent_message_id = send_pushover_notification(
+            task_title="Test URGENT Reminder",
+            task_priority="High",
+            due_time=now_utc,  # Due time is now
+            reminder_time=now_utc,  # Reminder time is also now (indicating urgency)
+            recipient=recipient
+        )
+        
+        message_ids = []
+        if normal_message_id:
+            message_ids.append(normal_message_id)
+            logger.info(f"Regular test Pushover notification sent successfully with ID: {normal_message_id}")
+        
+        if urgent_message_id:
+            message_ids.append(urgent_message_id)
+            logger.info(f"Urgent test Pushover notification sent successfully with ID: {urgent_message_id}")
+        
+        if message_ids:
             # Get the UK time representation for the response
             is_bst_active = is_bst(test_due_time)
             uk_time = test_due_time + timedelta(hours=1 if is_bst_active else 0)
             time_zone = "BST" if is_bst_active else "GMT"
             
-            logger.info(f"Test Pushover notification sent successfully with ID: {message_id}")
             return {
-                "message": "Test Pushover notification sent successfully", 
-                "message_id": message_id, 
+                "message": f"Test Pushover notifications sent successfully ({len(message_ids)} messages)", 
+                "message_ids": message_ids, 
                 "to": recipient[-5:] if recipient else "Unknown",
                 "time_info": {
                     "utc_time": test_due_time.isoformat(),
@@ -778,8 +828,8 @@ async def test_pushover_message():
                 }
             }
         else:
-            logger.error("Failed to send Pushover notification - no message ID returned")
-            raise HTTPException(status_code=500, detail="Failed to send Pushover notification - check server logs")
+            logger.error("Failed to send Pushover notifications - no message IDs returned")
+            raise HTTPException(status_code=500, detail="Failed to send Pushover notifications - check server logs")
     except Exception as e:
         import traceback
         error_detail = str(e)
