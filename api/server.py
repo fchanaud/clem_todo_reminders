@@ -95,6 +95,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Apply a monkey patch to fix the proxy parameter incompatibility in Supabase/GoTrue
+try:
+    import httpx
+    original_init = httpx.Client.__init__
+    def patched_init(self, *args, **kwargs):
+        if 'proxy' in kwargs:
+            print("Removing 'proxy' from httpx Client kwargs to prevent errors")
+            del kwargs['proxy']
+        return original_init(self, *args, **kwargs)
+    httpx.Client.__init__ = patched_init
+    print("Applied monkey patch for httpx.Client to fix proxy parameter issue")
+except Exception as patch_error:
+    print(f"Failed to apply httpx.Client patch: {str(patch_error)}")
+
 # Initialize Supabase client
 try:
     # Print out environment variables for debugging
