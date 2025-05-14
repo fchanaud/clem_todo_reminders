@@ -109,14 +109,20 @@ export default function TaskForm({ onTaskAdded }) {
         throw new Error('Failed to create task');
       }
 
+      const createdTask = await response.json();
+      
       toast.success('Task created successfully!');
+      
+      // Reset form fields
       setTitle('');
       setDueDate('');
       setDueHour('09');
       setPriority('Medium');
       setUseSingleReminder(false);
       setHoursBefore('2');
-      onTaskAdded();
+      
+      // Notify parent with the new task data
+      onTaskAdded(createdTask);
     } catch (error) {
       toast.error('Failed to create task');
       console.error('Error:', error);

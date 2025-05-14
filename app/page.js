@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Toaster } from "react-hot-toast";
 import TaskForm from "./components/TaskForm";
 import TaskList from "./components/TaskList";
@@ -14,6 +14,8 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showPwaPrompt, setShowPwaPrompt] = useState(false);
+  const [taskAdded, setTaskAdded] = useState(false);
+  const listEndRef = useRef(null);
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -54,6 +56,29 @@ export default function Home() {
       setLoading(false);
     }
   };
+
+  const handleTaskAdded = async (newTask) => {
+    if (newTask) {
+      // If we have the new task data, add it directly to state
+      setTasks(prevTasks => ({
+        ...prevTasks,
+        incomplete_tasks: [...prevTasks.incomplete_tasks, newTask]
+      }));
+      setTaskAdded(true);
+    } else {
+      // Fall back to refetching if no task data provided
+      await fetchTasks();
+      setTaskAdded(true);
+    }
+  };
+
+  // Scroll to the bottom when a new task is added
+  useEffect(() => {
+    if (taskAdded && listEndRef.current) {
+      listEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      setTaskAdded(false);
+    }
+  }, [taskAdded, tasks]);
 
   useEffect(() => {
     fetchTasks();
@@ -101,13 +126,14 @@ export default function Home() {
           </div>
         )}
 
-        <TaskForm onTaskAdded={fetchTasks} />
+        <TaskForm onTaskAdded={handleTaskAdded} />
         <TaskList 
           tasks={tasks} 
           loading={loading} 
           error={error}
           onTasksChanged={fetchTasks}
         />
+        <div ref={listEndRef} />
       </div>
       <Toaster position="bottom-center" />
     </main>

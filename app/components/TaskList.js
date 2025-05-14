@@ -25,50 +25,23 @@ const getApiUrl = () => {
 
 const API_URL = getApiUrl();
 
-export default function TaskList({ refreshTrigger }) {
+export default function TaskList({ tasks, loading, error, onTasksChanged }) {
   const [incompleteTasks, setIncompleteTasks] = useState([]);
   const [completedTasks, setCompletedTasks] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [showCompleted, setShowCompleted] = useState(false);
 
-  const fetchTasks = async () => {
-    setLoading(true);
-    try {
-      const response = await fetch(`${API_URL}/api/tasks`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch tasks: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      // API returns { incomplete_tasks, completed_tasks } format
-      if (data && data.incomplete_tasks && Array.isArray(data.incomplete_tasks)) {
-        setIncompleteTasks(data.incomplete_tasks || []);
-        setCompletedTasks(data.completed_tasks || []);
-      } else if (Array.isArray(data)) {
-        // For backward compatibility - split array data into incomplete and completed
-        const incomplete = data.filter(task => !task.completed);
-        const completed = data.filter(task => task.completed);
-        setIncompleteTasks(incomplete);
-        setCompletedTasks(completed);
-      } else {
-        console.error('Unexpected data format:', data);
-        setIncompleteTasks([]);
-        setCompletedTasks([]);
-      }
-    } catch (error) {
-      console.error('Error fetching tasks:', error.message);
-      toast.error('Failed to fetch tasks');
-      setIncompleteTasks([]);
-      setCompletedTasks([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Sort and set tasks when they change
   useEffect(() => {
-    fetchTasks();
-  }, [refreshTrigger]);
+    if (tasks && tasks.incomplete_tasks) {
+      // Sort incomplete tasks by due_time (ascending - upcoming first)
+      const sortedIncompleteTasks = [...tasks.incomplete_tasks].sort((a, b) => {
+        return new Date(a.due_time) - new Date(b.due_time);
+      });
+      
+      setIncompleteTasks(sortedIncompleteTasks);
+      setCompletedTasks(tasks.completed_tasks || []);
+    }
+  }, [tasks]);
 
   const handleComplete = async (taskId) => {
     try {
@@ -96,6 +69,9 @@ export default function TaskList({ refreshTrigger }) {
         };
         setCompletedTasks(prev => [completedTask, ...prev]);
       }
+      
+      // Notify parent component that tasks have changed
+      if (onTasksChanged) onTasksChanged();
     } catch (error) {
       console.error('Error completing task:', error.message);
       toast.error('Failed to update task');
@@ -117,13 +93,16 @@ export default function TaskList({ refreshTrigger }) {
       // Update state locally instead of refetching
       setIncompleteTasks(prev => prev.filter(t => t.id !== taskId));
       setCompletedTasks(prev => prev.filter(t => t.id !== taskId));
+      
+      // Notify parent component that tasks have changed
+      if (onTasksChanged) onTasksChanged();
     } catch (error) {
       console.error('Error deleting task:', error.message);
       toast.error('Failed to delete task');
     }
   };
 
-  const TaskCard = ({ task, isCompleted = false }) => (
+  const TaskCard = ({ task, isCompleted = false, handleComplete, handleDelete }) => (
     <div className="bg-white rounded-lg shadow-sm p-4 mb-3 border border-gray-100">
       <div className="flex flex-col">
         <div className="flex-1">
@@ -193,6 +172,10 @@ export default function TaskList({ refreshTrigger }) {
     );
   }
 
+  if (error) {
+    return <div className="p-4 text-center text-red-500">{error}</div>;
+  }
+
   if (incompleteTasks.length === 0 && completedTasks.length === 0) {
     return (
       <div className="p-4 text-center text-gray-500">
@@ -209,7 +192,12 @@ export default function TaskList({ refreshTrigger }) {
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Active Tasks</h2>
           <div className="space-y-3">
             {incompleteTasks.map((task) => (
-              <TaskCard key={task.id} task={task} />
+              <TaskCard 
+                key={task.id} 
+                task={task} 
+                handleComplete={handleComplete}
+                handleDelete={handleDelete}
+              />
             ))}
           </div>
         </div>
@@ -229,7 +217,13 @@ export default function TaskList({ refreshTrigger }) {
             {showCompleted && (
               <div className="space-y-3">
                 {completedTasks.map((task) => (
-                  <TaskCard key={task.id} task={task} isCompleted />
+                  <TaskCard 
+                    key={task.id} 
+                    task={task} 
+                    isCompleted 
+                    handleComplete={handleComplete}
+                    handleDelete={handleDelete}
+                  />
                 ))}
               </div>
             )}
