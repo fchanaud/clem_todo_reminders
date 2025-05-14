@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 
 // Get API URL with a more robust approach
@@ -31,6 +31,38 @@ export default function TaskForm({ onTaskAdded }) {
   const [priority, setPriority] = useState('Medium');
   const [useSingleReminder, setUseSingleReminder] = useState(false);
   const [hoursBefore, setHoursBefore] = useState('2');
+  const [availableHours, setAvailableHours] = useState([]);
+
+  // Effect to update available hours when date changes
+  useEffect(() => {
+    updateAvailableHours();
+  }, [dueDate]);
+
+  // Function to update available hours based on current date
+  const updateAvailableHours = () => {
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    
+    // Generate all hours (00-23)
+    const allHours = Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0'));
+    
+    // If the selected date is today, filter out past hours
+    if (dueDate === today) {
+      const currentHour = now.getHours();
+      const futureHours = allHours.filter(hour => parseInt(hour) > currentHour);
+      setAvailableHours(futureHours);
+      
+      // If the currently selected hour is in the past, reset it to the next available hour
+      if (parseInt(dueHour) <= currentHour) {
+        // Set to the next hour if available, otherwise the first available hour
+        const nextHour = (currentHour + 1).toString().padStart(2, '0');
+        setDueHour(futureHours.includes(nextHour) ? nextHour : (futureHours[0] || '00'));
+      }
+    } else {
+      // If not today, all hours are available
+      setAvailableHours(allHours);
+    }
+  };
 
   const capitalizeFirstLetter = (string) => {
     return string.charAt(0).toUpperCase() + string.slice(1);
@@ -42,6 +74,13 @@ export default function TaskForm({ onTaskAdded }) {
     try {
       // Combine date and hour into ISO string
       const combinedDueTime = new Date(`${dueDate}T${dueHour}:00:00`);
+      const now = new Date();
+      
+      // Check if the due time is in the past
+      if (combinedDueTime <= now) {
+        toast.error('Task due time cannot be in the past');
+        return;
+      }
       
       const requestBody = {
         title: capitalizeFirstLetter(title.trim()),
@@ -81,8 +120,10 @@ export default function TaskForm({ onTaskAdded }) {
     }
   };
 
-  // Generate hours for the select input (00-23)
-  const hours = Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0'));
+  // Handle date change
+  const handleDateChange = (e) => {
+    setDueDate(e.target.value);
+  };
   
   // Generate hours before options (1-24)
   const hoursBeforeOptions = Array.from({ length: 24 }, (_, i) => (i + 1).toString());
@@ -113,7 +154,7 @@ export default function TaskForm({ onTaskAdded }) {
             type="date"
             id="dueDate"
             value={dueDate}
-            onChange={(e) => setDueDate(e.target.value)}
+            onChange={handleDateChange}
             required
             min={new Date().toISOString().split('T')[0]}
             className="form-input mt-1 block w-full rounded-lg border-gray-300 bg-white py-3 px-4 text-gray-900 shadow-sm focus:border-primary-500 focus:ring-primary-500"
@@ -131,12 +172,21 @@ export default function TaskForm({ onTaskAdded }) {
             required
             className="form-select mt-1 block w-full rounded-lg border-gray-300 bg-white py-3 px-4 text-gray-900 shadow-sm focus:border-primary-500 focus:ring-primary-500"
           >
-            {hours.map((hour) => (
-              <option key={hour} value={hour}>
-                {hour}:00
-              </option>
-            ))}
+            {availableHours.length > 0 ? (
+              availableHours.map((hour) => (
+                <option key={hour} value={hour}>
+                  {hour}:00
+                </option>
+              ))
+            ) : (
+              <option value={dueHour}>{dueHour}:00</option>
+            )}
           </select>
+          {availableHours.length === 0 && dueDate && (
+            <p className="text-xs text-gray-500 mt-1">
+              Please select a date first
+            </p>
+          )}
         </div>
 
         <div className="sm:col-span-3">

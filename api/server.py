@@ -152,8 +152,18 @@ def send_pushover_notification(task_title, task_priority, due_time, recipient=RE
         import requests
         logger.info("Preparing to send Pushover notification")
         
-        # Format the due time for display
-        due_time_str = due_time.strftime("%A, %B %d at %I:%M %p")
+        # Convert due_time to UK time for display
+        # Determine if we're in British Summer Time
+        is_british_summer_time = is_bst(due_time)
+        
+        # Apply UK offset to convert to UK time
+        uk_offset = 1 if is_british_summer_time else 0
+        uk_due_time = due_time + timedelta(hours=uk_offset)
+        
+        # Format the UK due time for display
+        due_time_str = uk_due_time.strftime("%A, %B %d at %I:%M %p")
+        time_zone_suffix = "BST" if is_british_summer_time else "GMT"
+        due_time_str = f"{due_time_str} ({time_zone_suffix})"
         
         # Create a message with task details
         message_body = f"🔔 Reminder: \"{task_title}\" is due on {due_time_str}\nPriority: {task_priority}"
@@ -282,6 +292,31 @@ def check_upcoming_reminders():
                 logger.error(f"Error querying reminders: {error_str}")
                 raise query_error
         
+        # Make sure the processed_reminders table exists
+        try:
+            # Try checking the table
+            test_result = supabase.table("processed_reminders").select("count").limit(1).execute()
+            print(f"  Processed reminders table is accessible")
+        except Exception as table_error:
+            print(f"  Creating processed_reminders table: {str(table_error)}")
+            try:
+                # Create the processed_reminders table
+                create_processed_table_query = """
+                CREATE TABLE IF NOT EXISTS processed_reminders (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    reminder_id UUID REFERENCES reminders(id) ON DELETE CASCADE,
+                    processed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    message_id TEXT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_reminders(reminder_id);
+                """
+                # Create table via RPC
+                supabase.rpc("exec_sql", {"query": create_processed_table_query}).execute()
+                print(f"  ✅ Successfully created processed_reminders table")
+            except Exception as create_error:
+                print(f"  ❌ Failed to create processed_reminders table: {str(create_error)}")
+        
         # Add a processed status tracker to avoid duplicate notifications
         # Check last processed reminder time in database
         try:
@@ -338,6 +373,12 @@ def check_upcoming_reminders():
                 print(f"     Task completed: {task.get('completed', False)}")
                 print(f"     Priority: {task.get('priority', 'Unknown')}")
                 
+                # Also check and log if reminder is already processed
+                reminder_id = reminder.get("id")
+                already_processed = check_reminder_processed(reminder_id)
+                if already_processed:
+                    print(f"     ⚠️ Already processed: Yes")
+                
             logger.info(f"Reminder data: {json.dumps(reminders, default=str)}")
         else:
             print("  No reminders found in the catchup window")
@@ -353,44 +394,60 @@ def check_upcoming_reminders():
             task = reminder.get("tasks", {})
             if task and not task.get("completed", False):
                 reminder_time = datetime.fromisoformat(reminder.get("reminder_time").replace('Z', '+00:00'))
+                reminder_id = reminder.get("id")
                 
-                # Skip if we already processed this reminder
-                if reminder_time <= last_processed_time:
-                    print(f"  Skipping reminder {i+1}: {task.get('title')} - Already processed before")
+                # Check if this reminder has already been processed
+                already_processed = check_reminder_processed(reminder_id)
+                if already_processed:
+                    print(f"  Skipping reminder {i+1}: {task.get('title')} - Already processed (found in processed_reminders)")
+                    logger.info(f"Skipping reminder {reminder_id} for task '{task.get('title')}' - Already processed")
                     skipped_already_processed += 1
                     continue
-                
-                print(f"  Processing reminder {i+1}: {task.get('title')} at {reminder_time.isoformat()}")
-                logger.info(f"Processing reminder for task: {task.get('title')} at {reminder_time.isoformat()}")
-                logger.info(f"Task details: {json.dumps(task, default=str)}")
-                
-                # Get the task's phone number or use the default
-                recipient = task.get("phone_number", RECIPIENT_USER_KEY)
-                print(f"  Sending to: {recipient}")
-                logger.info(f"Sending reminder message to recipient: {recipient}")
-                
-                # Check if Pushover is configured
-                send_pushover = True if PUSHOVER_API_TOKEN and PUSHOVER_USER_KEY else False
-                
-                message_results = {}
-                
-                # Send Pushover notification if configured
-                if send_pushover:
-                    pushover_message_id = send_pushover_notification(
-                        task_title=task.get("title"),
-                        task_priority=task.get("priority"),
-                        due_time=datetime.fromisoformat(task.get("due_time").replace('Z', '+00:00')),
-                        recipient=recipient
-                    )
                     
-                    if pushover_message_id:
-                        message_results["pushover"] = pushover_message_id
-                        print(f"  ✅ Pushover notification sent successfully, ID: {pushover_message_id}")
-                        sent_count += 1
-                    else:
-                        print(f"  ❌ Failed to send Pushover notification")
-                
-                logger.info(f"Reminder messages sent: {json.dumps(message_results)}")
+                # Process this reminder if it's due (in the past or current hour)
+                if reminder_time <= now_utc or (
+                    reminder_time.replace(minute=0, second=0, microsecond=0) == 
+                    now_utc.replace(minute=0, second=0, microsecond=0)
+                ):
+                    print(f"  Processing reminder {i+1}: {task.get('title')} at {reminder_time.isoformat()}")
+                    logger.info(f"Processing reminder for task: {task.get('title')} at {reminder_time.isoformat()}")
+                    logger.info(f"Task details: {json.dumps(task, default=str)}")
+                    
+                    # Get the task's phone number or use the default
+                    recipient = task.get("phone_number", RECIPIENT_USER_KEY)
+                    print(f"  Sending to: {recipient}")
+                    logger.info(f"Sending reminder message to recipient: {recipient}")
+                    
+                    # Check if Pushover is configured
+                    send_pushover = True if PUSHOVER_API_TOKEN and PUSHOVER_USER_KEY else False
+                    
+                    message_results = {}
+                    
+                    # Send Pushover notification if configured
+                    if send_pushover:
+                        pushover_message_id = send_pushover_notification(
+                            task_title=task.get("title"),
+                            task_priority=task.get("priority"),
+                            due_time=datetime.fromisoformat(task.get("due_time").replace('Z', '+00:00')),
+                            recipient=recipient
+                        )
+                        
+                        if pushover_message_id:
+                            message_results["pushover"] = pushover_message_id
+                            print(f"  ✅ Pushover notification sent successfully, ID: {pushover_message_id}")
+                            sent_count += 1
+                            
+                            # Mark reminder as processed
+                            if mark_reminder_processed(reminder_id, pushover_message_id, now_utc):
+                                print(f"  ✅ Marked reminder {reminder_id} as processed")
+                            else:
+                                print(f"  ⚠️ Failed to mark reminder {reminder_id} as processed")
+                        else:
+                            print(f"  ❌ Failed to send Pushover notification")
+                    
+                    logger.info(f"Reminder messages sent: {json.dumps(message_results)}")
+                else:
+                    print(f"  Skipping reminder {i+1}: {task.get('title')} - Not due yet ({reminder_time.isoformat()})")
             else:
                 reason = "Task already completed" if task and task.get("completed", False) else "Task not found"
                 print(f"  Skipping reminder {i+1}: {reason}")
@@ -494,6 +551,14 @@ Output: JSON array only."""
 @app.post("/api/tasks")
 async def create_task(task: Task):
     try:
+        # Check if the due_time is in the past
+        now = datetime.now(timezone.utc)
+        if task.due_time <= now:
+            raise HTTPException(
+                status_code=400, 
+                detail="Task due time cannot be in the past"
+            )
+            
         # Create the task
         task_data = {
             "title": task.title,
@@ -541,6 +606,9 @@ async def create_task(task: Task):
                 supabase.table("reminders").insert(reminder_data).execute()
         
         return task_result.data[0]
+    except HTTPException as e:
+        # Re-raise HTTP exceptions
+        raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -649,19 +717,34 @@ async def test_pushover_message():
         
         logger.info(f"Sending test Pushover notification to user key ending in {recipient[-5:] if recipient else 'Unknown'}")
         
+        # Get current time in UTC and calculate due time 1 hour from now
+        now_utc = datetime.now(timezone.utc)
+        test_due_time = now_utc + timedelta(hours=1)
+        
+        # Send the notification with UK time display
         message_id = send_pushover_notification(
             task_title="Test Reminder",
             task_priority="Medium",
-            due_time=datetime.now(timezone.utc) + timedelta(hours=1),
+            due_time=test_due_time,
             recipient=recipient
         )
         
         if message_id:
+            # Get the UK time representation for the response
+            is_bst_active = is_bst(test_due_time)
+            uk_time = test_due_time + timedelta(hours=1 if is_bst_active else 0)
+            time_zone = "BST" if is_bst_active else "GMT"
+            
             logger.info(f"Test Pushover notification sent successfully with ID: {message_id}")
             return {
                 "message": "Test Pushover notification sent successfully", 
                 "message_id": message_id, 
-                "to": recipient[-5:] if recipient else "Unknown"
+                "to": recipient[-5:] if recipient else "Unknown",
+                "time_info": {
+                    "utc_time": test_due_time.isoformat(),
+                    "uk_time": uk_time.isoformat(),
+                    "time_zone": time_zone
+                }
             }
         else:
             logger.error("Failed to send Pushover notification - no message ID returned")
@@ -778,6 +861,24 @@ def execute_migration():
                     # Use rpc instead of query for Supabase 2.3.4
                     supabase.rpc("exec_sql", {"query": migration_sql}).execute()
                 logger.info(f"Applied create_reminders_table migration from path: {path}")
+                
+                # Try to create the processed_reminders table too
+                try:
+                    create_processed_table_query = """
+                    CREATE TABLE IF NOT EXISTS processed_reminders (
+                        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                        reminder_id UUID REFERENCES reminders(id) ON DELETE CASCADE,
+                        processed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                        message_id TEXT,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_reminders(reminder_id);
+                    """
+                    supabase.rpc("exec_sql", {"query": create_processed_table_query}).execute()
+                    logger.info("Created processed_reminders table")
+                except Exception as e:
+                    logger.warning(f"Could not create processed_reminders table: {str(e)}")
+                
                 return True
         except Exception as path_error:
             logger.warning(f"Could not apply migration from path {path}: {str(path_error)}")
@@ -816,11 +917,196 @@ def execute_migration():
             except Exception as e:
                 logger.error(f"Error creating app_status table: {str(e)}")
         
+        # Create processed_reminders table
+        try:
+            # Check if table exists
+            result = supabase.table("processed_reminders").select("id").limit(1).execute()
+            logger.info("Processed reminders table already exists")
+        except Exception:
+            logger.info("Processed reminders table doesn't exist yet")
+            # Can't create it easily without SQL - will be created when needed
+        
         logger.info("Database tables checked/created")
         return True
     except Exception as e:
         logger.error(f"Failed to apply migration: {str(e)}")
         return False
+
+def check_reminder_processed(reminder_id):
+    """
+    Check if a reminder has already been processed by querying the processed_reminders table
+    Returns True if already processed, False otherwise
+    """
+    try:
+        # First ensure the table exists
+        try:
+            # Try to access the table to see if it exists
+            test_result = supabase.table("processed_reminders").select("count").limit(1).execute()
+            logger.info(f"Processed reminders table exists and is accessible")
+        except Exception as table_error:
+            # Table doesn't exist or isn't accessible, create it
+            logger.warning(f"Processed reminders table issue: {str(table_error)}")
+            logger.info("Creating processed_reminders table")
+            create_processed_table_query = """
+            CREATE TABLE IF NOT EXISTS processed_reminders (
+                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                reminder_id UUID REFERENCES reminders(id) ON DELETE CASCADE,
+                processed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                message_id TEXT,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_reminders(reminder_id);
+            """
+            # Try to create the table via RPC
+            try:
+                supabase.rpc("exec_sql", {"query": create_processed_table_query}).execute()
+                logger.info("Successfully created processed_reminders table")
+            except Exception as rpc_error:
+                logger.error(f"Failed to create processed_reminders table via RPC: {str(rpc_error)}")
+        
+        # Now check if this specific reminder has been processed
+        result = (
+            supabase.table("processed_reminders")
+            .select("*")
+            .eq("reminder_id", reminder_id)
+            .execute()
+        )
+        
+        is_processed = len(result.data) > 0
+        logger.info(f"Reminder {reminder_id} processed status check: {is_processed}")
+        if is_processed:
+            logger.info(f"Reminder {reminder_id} was previously processed at {result.data[0].get('processed_at')}")
+        
+        # If any records found, the reminder has been processed
+        return is_processed
+    except Exception as e:
+        logger.warning(f"Error checking if reminder {reminder_id} is processed: {str(e)}")
+        # If we can't check, assume not processed to be safe
+        return False
+
+def mark_reminder_processed(reminder_id, message_id=None, now_utc=None):
+    """
+    Mark a reminder as processed in the processed_reminders table
+    Returns True if successful, False otherwise
+    """
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    
+    # First check if already processed to avoid duplicate entries
+    try:
+        already_processed = check_reminder_processed(reminder_id)
+        if already_processed:
+            logger.info(f"Reminder {reminder_id} already marked as processed, skipping")
+            return True
+    except Exception as check_error:
+        logger.warning(f"Error checking if reminder {reminder_id} is already processed: {str(check_error)}")
+        # Continue anyway to try to mark it
+        
+    try:
+        data = {
+            "reminder_id": reminder_id,
+            "processed_at": now_utc.isoformat(),
+        }
+        if message_id:
+            data["message_id"] = message_id
+        
+        logger.info(f"Marking reminder {reminder_id} as processed with data: {json.dumps(data, default=str)}")
+        insert_result = supabase.table("processed_reminders").insert(data).execute()
+        logger.info(f"Successfully marked reminder {reminder_id} as processed")
+        return True
+    except Exception as e:
+        error_str = str(e)
+        # If the table doesn't exist, try to create it
+        if "relation" in error_str and "does not exist" in error_str:
+            try:
+                # Create the processed_reminders table
+                logger.info("Creating processed_reminders table")
+                create_processed_table_query = """
+                CREATE TABLE IF NOT EXISTS processed_reminders (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    reminder_id UUID REFERENCES reminders(id) ON DELETE CASCADE,
+                    processed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    message_id TEXT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_reminders(reminder_id);
+                """
+                # Try to create the table via RPC
+                try:
+                    supabase.rpc("exec_sql", {"query": create_processed_table_query}).execute()
+                    
+                    # Try insertion again
+                    data = {
+                        "reminder_id": reminder_id,
+                        "processed_at": now_utc.isoformat(),
+                    }
+                    if message_id:
+                        data["message_id"] = message_id
+                    
+                    supabase.table("processed_reminders").insert(data).execute()
+                    logger.info(f"Successfully created table and marked reminder {reminder_id} as processed")
+                    return True
+                except Exception as rpc_error:
+                    logger.error(f"Failed to create processed_reminders table via RPC: {str(rpc_error)}")
+                    return False
+            except Exception as create_error:
+                logger.error(f"Failed to create processed_reminders table: {str(create_error)}")
+                return False
+        else:
+            logger.error(f"Error marking reminder {reminder_id} as processed: {error_str}")
+            return False
+
+# Add an admin endpoint to reset the processed reminders
+@app.post("/api/admin/reset-processed-reminders")
+async def reset_processed_reminders(request: Request):
+    """Admin endpoint to reset processed reminders so they can be sent again"""
+    # Get verification token from environment
+    verify_token = os.getenv("VERIFY_TOKEN")
+    
+    # Get authorization header
+    auth_header = request.headers.get("Authorization")
+    
+    # Verify the token for security
+    if verify_token and (not auth_header or auth_header != f"Bearer {verify_token}"):
+        logger.warning(f"Unauthorized access attempt to reset-processed-reminders endpoint")
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    try:
+        # Try to clear the processed_reminders table
+        try:
+            deleted_result = supabase.table("processed_reminders").delete().neq("id", "dummy").execute()
+            processed_cleared = True
+            cleared_count = len(deleted_result.data)
+        except Exception as e:
+            processed_cleared = False
+            cleared_count = 0
+            logger.warning(f"Could not clear processed_reminders table: {str(e)}")
+        
+        # Also reset the last_processed_time in app_status as a fallback
+        reset_time = datetime.now(timezone.utc) - timedelta(hours=24)
+        try:
+            update_result = (
+                supabase.table("app_status")
+                .update({"value": reset_time.isoformat()})
+                .eq("name", "last_processed_time")
+                .execute()
+            )
+            time_reset = True
+        except Exception as e:
+            time_reset = False
+            logger.warning(f"Could not reset last_processed_time: {str(e)}")
+        
+        return {
+            "message": "Reminder processing history reset",
+            "processed_reminders_cleared": processed_cleared,
+            "cleared_count": cleared_count,
+            "last_processed_time_reset": time_reset,
+            "reset_to": reset_time.isoformat() if time_reset else None
+        }
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error resetting reminder processing history: {error_msg}", exc_info=True)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 if __name__ == "__main__":
     import uvicorn
