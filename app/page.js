@@ -82,7 +82,6 @@ export default function Home() {
       <div className="max-w-3xl mx-auto">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900 sm:text-4xl">Clem Todo Reminders</h1>
-          <p className="mt-3 text-lg text-gray-500">Keep track of your tasks with smart reminders</p>
         </div>
         
         {/* PWA installation prompt for iOS */}
