@@ -16,6 +16,7 @@ export default function Home() {
   const [showPwaPrompt, setShowPwaPrompt] = useState(false);
   const [taskAdded, setTaskAdded] = useState(false);
   const listEndRef = useRef(null);
+  const taskListRef = useRef(null);
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -72,10 +73,38 @@ export default function Home() {
     }
   };
 
-  // Scroll to the bottom when a new task is added
+  // Enhanced scroll functionality for better compatibility with iOS PWA
   useEffect(() => {
-    if (taskAdded && listEndRef.current) {
-      listEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    // Only attempt to scroll if a task was added
+    if (taskAdded) {
+      try {
+        // First, try with smooth scrolling
+        if (listEndRef.current) {
+          console.log('Attempting to scroll to new task with smooth behavior');
+          listEndRef.current.scrollIntoView({ 
+            behavior: 'smooth', 
+            block: 'end'
+          });
+          
+          // Set a backup direct scroll in case smooth scrolling doesn't work properly on iOS
+          setTimeout(() => {
+            if (listEndRef.current) {
+              window.scrollTo(0, document.body.scrollHeight);
+              console.log('Executed backup scroll to end of page');
+            }
+          }, 300);
+        } else {
+          // Fallback to window scroll
+          console.log('listEndRef not available, using window.scrollTo');
+          window.scrollTo(0, document.body.scrollHeight);
+        }
+      } catch (e) {
+        // Final fallback if all else fails
+        console.error('Error during scroll:', e);
+        window.scrollTo(0, document.body.scrollHeight);
+      }
+      
+      // Reset taskAdded flag
       setTaskAdded(false);
     }
   }, [taskAdded, tasks]);
@@ -127,13 +156,16 @@ export default function Home() {
         )}
 
         <TaskForm onTaskAdded={handleTaskAdded} />
-        <TaskList 
-          tasks={tasks} 
-          loading={loading} 
-          error={error}
-          onTasksChanged={fetchTasks}
-        />
-        <div ref={listEndRef} />
+        <div ref={taskListRef}>
+          <TaskList 
+            tasks={tasks} 
+            loading={loading} 
+            error={error}
+            onTasksChanged={fetchTasks}
+          />
+          {/* This div is the target for scrolling to the end of the task list */}
+          <div ref={listEndRef} className="h-4 w-full" />
+        </div>
       </div>
       <Toaster position="bottom-center" />
     </main>

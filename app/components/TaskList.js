@@ -123,15 +123,41 @@ export default function TaskList({ tasks, loading, error, onTasksChanged }) {
               </span>
             )}
           </div>
+          
+          {/* Enhanced reminder display for better iOS visibility */}
           {task.reminders && task.reminders.length > 0 && (
-            <div className="mt-2 space-y-1">
-              {task.reminders.map((reminder) => (
-                <div key={reminder.id} className="text-xs text-gray-500">
-                  {format(new Date(reminder.reminder_time), 'PPP p').replace(/:\d{2}(?!.*:)/, '')}
-                </div>
-              ))}
+            <div className="mt-3 border-t border-gray-100 pt-2">
+              <p className="text-xs font-medium text-gray-700 mb-1">Reminders:</p>
+              <div className="space-y-2">
+                {task.reminders.map((reminder, index) => {
+                  // Ensure valid date by safely parsing it
+                  let reminderDate;
+                  try {
+                    reminderDate = new Date(reminder.reminder_time);
+                    // Check if valid date
+                    if (isNaN(reminderDate.getTime())) {
+                      throw new Error('Invalid date');
+                    }
+                  } catch (e) {
+                    return (
+                      <div key={reminder.id || index} className="text-xs text-red-500">
+                        Invalid reminder time
+                      </div>
+                    );
+                  }
+                  
+                  return (
+                    <div key={reminder.id || index} 
+                      className="text-xs bg-gray-50 p-2 rounded flex items-center text-gray-700">
+                      <span className="mr-1">🔔</span>
+                      {format(reminderDate, 'EEE, MMM d, h:mm a')}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
+          
           {isCompleted && task.completed_at && (
             <div className="mt-2 text-xs text-gray-500">
               Completed: {format(new Date(task.completed_at), 'PPP p').replace(/:\d{2}(?!.*:)/, '')}
