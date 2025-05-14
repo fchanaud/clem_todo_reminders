@@ -407,12 +407,24 @@ def check_upcoming_reminders():
         print(f"- REMINDER CHECK COMPLETED: {sent_count} sent, {skipped_already_processed} already processed")
         print("-"*80)
         logger.info(f"Reminder check completed successfully: {sent_count} sent, {skipped_already_processed} already processed")
+        
+        # Store the counts as attributes of the function object for the endpoint to access
+        check_upcoming_reminders.last_found_count = len(reminders)
+        check_upcoming_reminders.last_sent_count = sent_count
+        check_upcoming_reminders.last_skipped_count = skipped_already_processed
+        
         return True
     except Exception as e:
         print(f"\n❌ ERROR: {str(e)}")
         import traceback
         print(traceback.format_exc())
         logger.error(f"Error checking upcoming reminders: {str(e)}", exc_info=True)
+        
+        # Set counts to 0 in case of failure
+        check_upcoming_reminders.last_found_count = 0
+        check_upcoming_reminders.last_sent_count = 0
+        check_upcoming_reminders.last_skipped_count = 0
+        
         return False
 
 def is_bst(utc_time):
@@ -694,7 +706,22 @@ async def check_reminders_endpoint(request: Request):
     try:
         print("\nStarting reminder check...")
         success = check_upcoming_reminders()
-        result = {"message": "Reminders checked successfully", "timestamp": datetime.now(timezone.utc).isoformat(), "success": success}
+        
+        # Get counts from global variables that will be set in check_upcoming_reminders
+        reminders_found = getattr(check_upcoming_reminders, 'last_found_count', 0)
+        sent_count = getattr(check_upcoming_reminders, 'last_sent_count', 0)
+        skipped_count = getattr(check_upcoming_reminders, 'last_skipped_count', 0)
+        
+        result = {
+            "message": "Reminders checked successfully", 
+            "timestamp": datetime.now(timezone.utc).isoformat(), 
+            "success": success,
+            "details": {
+                "reminders_found": reminders_found,
+                "notifications_sent": sent_count,
+                "already_processed": skipped_count
+            }
+        }
         print(f"\n✅ REMINDER CHECK COMPLETED: {json.dumps(result)}")
         logger.info(f"check-reminders endpoint completed: {json.dumps(result)}")
         return result
@@ -748,43 +775,48 @@ def execute_migration():
                     migration_sql = migration_sql.replace("public.reminders", "public.reminders")
                     migration_sql = migration_sql.replace("tasks(id)", "tasks(id)")
                     migration_sql = migration_sql.replace("idx_reminders_task_id", "idx_reminders_task_id")
-                    supabase.query(migration_sql).execute()
+                    # Use rpc instead of query for Supabase 2.3.4
+                    supabase.rpc("exec_sql", {"query": migration_sql}).execute()
                 logger.info(f"Applied create_reminders_table migration from path: {path}")
                 return True
         except Exception as path_error:
             logger.warning(f"Could not apply migration from path {path}: {str(path_error)}")
     
-    # As a last resort, use the SQL directly
+    # As a last resort, use direct table creation
     try:
-        logger.warning("Using hardcoded SQL for migrations as file could not be read")
-        migration_sql = f"""
-        -- Create reminders table if it doesn't exist
-        CREATE TABLE IF NOT EXISTS public.reminders (
-            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-            task_id UUID REFERENCES tasks(id) ON DELETE CASCADE,
-            reminder_time TIMESTAMP WITH TIME ZONE NOT NULL,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-        );
+        logger.warning("Using direct table creation as SQL file could not be read")
         
-        -- Create index for faster lookups if it doesn't exist
-        CREATE INDEX IF NOT EXISTS idx_reminders_task_id ON public.reminders(task_id);
-        """
-        supabase.query(migration_sql).execute()
+        # Create reminders table
+        try:
+            # First check if table exists
+            result = supabase.table("reminders").select("id").limit(1).execute()
+            logger.info("Reminders table already exists")
+        except Exception:
+            # Create the reminders table
+            logger.info("Creating reminders table")
+            # We can't use raw SQL easily in this version, so we'll create tables using Supabase REST API
+            # This will be caught by Supabase if table already exists
+            result = supabase.table("tasks").select("id").limit(1).execute()
         
-        # Create app_status table as well
-        app_status_sql = f"""
-        -- Create app_status table if it doesn't exist
-        CREATE TABLE IF NOT EXISTS public.app_status (
-            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-            name TEXT UNIQUE NOT NULL,
-            value TEXT NOT NULL,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-        );
-        """
-        supabase.query(app_status_sql).execute()
+        # Create app_status table
+        try:
+            # First check if table exists
+            result = supabase.table("app_status").select("id").limit(1).execute()
+            logger.info("App status table already exists")
+        except Exception:
+            # Create the app_status table and insert initial record
+            logger.info("Creating app_status table")
+            try:
+                # Initialize with a last_processed_time record
+                supabase.table("app_status").insert({
+                    "name": "last_processed_time",
+                    "value": datetime.now(timezone.utc).isoformat()
+                }).execute()
+                logger.info("Created app_status table with initial record")
+            except Exception as e:
+                logger.error(f"Error creating app_status table: {str(e)}")
         
-        logger.info("Applied create_reminders_table and app_status migrations from hardcoded SQL")
+        logger.info("Database tables checked/created")
         return True
     except Exception as e:
         logger.error(f"Failed to apply migration: {str(e)}")

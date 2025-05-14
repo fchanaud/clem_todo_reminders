@@ -7,4 +7,13 @@ CREATE TABLE IF NOT EXISTS public.reminders (
 );
 
 -- Create index for faster lookups if it doesn't exist
-CREATE INDEX IF NOT EXISTS idx_reminders_task_id ON public.reminders(task_id); 
+CREATE INDEX IF NOT EXISTS idx_reminders_task_id ON public.reminders(task_id);
+
+-- Create app_status table if it doesn't exist
+CREATE TABLE IF NOT EXISTS public.app_status (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT UNIQUE NOT NULL,
+    value TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+); 
