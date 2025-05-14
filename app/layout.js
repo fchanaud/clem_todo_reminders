@@ -1,6 +1,7 @@
 import { Inter } from 'next/font/google'
 import './globals.css'
 import ServiceWorkerRegistration from './components/ServiceWorkerRegistration'
+import KeepAliveProvider from './components/KeepAliveProvider'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -41,6 +42,7 @@ export default function RootLayout({ children }) {
       </head>
       <body className={inter.className}>
         <ServiceWorkerRegistration />
+        <KeepAliveProvider />
         {children}
       </body>
     </html>

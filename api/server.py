@@ -919,6 +919,29 @@ async def health_check():
         "pushover_configured": bool(PUSHOVER_API_TOKEN and PUSHOVER_USER_KEY)
     }
 
+@app.get("/api/ping")
+async def ping():
+    """Simple endpoint that returns a 200 OK status to keep the server alive"""
+    logger.info("Received ping request to keep server alive")
+    return {"status": "alive", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+@app.get("/api/cron-ping")
+async def cron_ping():
+    """Endpoint for external cron services to ping to keep the server alive"""
+    logger.info("Received cron ping to keep server alive")
+    # Perform a small dummy database operation to keep connections warm
+    try:
+        tasks_count = supabase.table(f"{TABLE_PREFIX}tasks").select("id", count="exact").execute()
+        logger.info(f"Current tasks count: {tasks_count.count if hasattr(tasks_count, 'count') else 'unknown'}")
+    except Exception as e:
+        logger.warning(f"Error during cron ping database operation: {str(e)}")
+    
+    return {
+        "status": "alive", 
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "message": "Cron ping received and processed"
+    }
+
 def execute_migration():
     """Helper function to execute the reminders table migration"""
     # Determine the migration file path based on environment

@@ -85,6 +85,22 @@ This application can be installed as a PWA on iOS and Android devices:
 
 The app will install on your home screen and can be launched like any native app, with full screen display and offline capabilities.
 
+## Preventing App Sleep on Render.com
+
+Render.com free tier services will sleep after 15 minutes of inactivity. To prevent this, this application implements two keep-alive strategies:
+
+1. **Client-Side Pinging**: The frontend automatically sends periodic pings (every 10 minutes) to the backend server to keep it alive while the app is open in any browser tab.
+
+2. **External Cron Job (Recommended)**: For more reliable uptime, set up a free cron job service to ping your backend:
+
+   - Sign up for a free account at [Cron-job.org](https://cron-job.org/), [UptimeRobot](https://uptimerobot.com/), or similar service
+   - Create a new cron job to ping your backend URL every 10-12 minutes:
+     - URL: `https://clem-todo-backend.onrender.com/api/cron-ping`
+     - Frequency: Every 10-12 minutes
+   - This will keep your backend active 24/7 without any additional cost
+
+These strategies ensure your app remains responsive and notifications continue to work properly without paying for upgraded hosting.
+
 ## Project Structure
 
 ```
