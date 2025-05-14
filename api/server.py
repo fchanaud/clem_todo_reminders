@@ -292,30 +292,28 @@ def check_upcoming_reminders():
                 logger.error(f"Error querying reminders: {error_str}")
                 raise query_error
         
-        # Make sure the processed_reminders table exists
+        # Check if the processed_reminders table exists (but don't try to create it)
+        processed_table_exists = True
         try:
             # Try checking the table
             test_result = supabase.table("processed_reminders").select("count").limit(1).execute()
             print(f"  Processed reminders table is accessible")
         except Exception as table_error:
-            print(f"  Creating processed_reminders table: {str(table_error)}")
-            try:
-                # Create the processed_reminders table
-                create_processed_table_query = """
-                CREATE TABLE IF NOT EXISTS processed_reminders (
-                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                    reminder_id UUID REFERENCES reminders(id) ON DELETE CASCADE,
-                    processed_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                    message_id TEXT,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_reminders(reminder_id);
-                """
-                # Create table via RPC
-                supabase.rpc("exec_sql", {"query": create_processed_table_query}).execute()
-                print(f"  ✅ Successfully created processed_reminders table")
-            except Exception as create_error:
-                print(f"  ❌ Failed to create processed_reminders table: {str(create_error)}")
+            error_message = str(table_error)
+            processed_table_exists = False
+            print(f"  The processed_reminders table doesn't exist. Please create it manually with SQL:")
+            print(f"""  
+CREATE TABLE IF NOT EXISTS processed_reminders (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    reminder_id UUID REFERENCES reminders(id) ON DELETE CASCADE,
+    processed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    message_id TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_reminders(reminder_id);
+            """)
+            logger.warning(f"The processed_reminders table doesn't exist: {error_message}")
+            logger.warning(f"Please create the processed_reminders table manually in Supabase SQL editor.")
         
         # Add a processed status tracker to avoid duplicate notifications
         # Check last processed reminder time in database
@@ -374,10 +372,11 @@ def check_upcoming_reminders():
                 print(f"     Priority: {task.get('priority', 'Unknown')}")
                 
                 # Also check and log if reminder is already processed
-                reminder_id = reminder.get("id")
-                already_processed = check_reminder_processed(reminder_id)
-                if already_processed:
-                    print(f"     ⚠️ Already processed: Yes")
+                if processed_table_exists:
+                    reminder_id = reminder.get("id")
+                    already_processed = check_reminder_processed(reminder_id)
+                    if already_processed:
+                        print(f"     ⚠️ Already processed: Yes")
                 
             logger.info(f"Reminder data: {json.dumps(reminders, default=str)}")
         else:
@@ -397,12 +396,13 @@ def check_upcoming_reminders():
                 reminder_id = reminder.get("id")
                 
                 # Check if this reminder has already been processed
-                already_processed = check_reminder_processed(reminder_id)
-                if already_processed:
-                    print(f"  Skipping reminder {i+1}: {task.get('title')} - Already processed (found in processed_reminders)")
-                    logger.info(f"Skipping reminder {reminder_id} for task '{task.get('title')}' - Already processed")
-                    skipped_already_processed += 1
-                    continue
+                if processed_table_exists:
+                    already_processed = check_reminder_processed(reminder_id)
+                    if already_processed:
+                        print(f"  Skipping reminder {i+1}: {task.get('title')} - Already processed (found in processed_reminders)")
+                        logger.info(f"Skipping reminder {reminder_id} for task '{task.get('title')}' - Already processed")
+                        skipped_already_processed += 1
+                        continue
                     
                 # Process this reminder if it's due (in the past or current hour)
                 if reminder_time <= now_utc or (
@@ -437,11 +437,15 @@ def check_upcoming_reminders():
                             print(f"  ✅ Pushover notification sent successfully, ID: {pushover_message_id}")
                             sent_count += 1
                             
-                            # Mark reminder as processed
-                            if mark_reminder_processed(reminder_id, pushover_message_id, now_utc):
-                                print(f"  ✅ Marked reminder {reminder_id} as processed")
+                            # Mark reminder as processed if the table exists
+                            if processed_table_exists:
+                                if mark_reminder_processed(reminder_id, pushover_message_id, now_utc):
+                                    print(f"  ✅ Marked reminder {reminder_id} as processed")
+                                else:
+                                    print(f"  ⚠️ Failed to mark reminder {reminder_id} as processed")
                             else:
-                                print(f"  ⚠️ Failed to mark reminder {reminder_id} as processed")
+                                print(f"  ⚠️ Cannot mark as processed - processed_reminders table doesn't exist")
+                                logger.warning(f"Cannot mark reminder {reminder_id} as processed - table doesn't exist")
                         else:
                             print(f"  ❌ Failed to send Pushover notification")
                     
@@ -524,6 +528,7 @@ Rules:
 - Quick tasks (buy wine) → 1-2 reminders
 - Only 08:00-22:00 UK time
 - Space evenly
+- IMPORTANT: Each reminder time must be unique
 
 Output: JSON array only."""
         
@@ -538,7 +543,20 @@ Output: JSON array only."""
         )
         
         reminder_times = json.loads(response.choices[0].message.content)
-        return [datetime.fromisoformat(time.replace('Z', '+00:00')) for time in reminder_times]
+        # Convert to datetime objects
+        reminder_datetimes = [datetime.fromisoformat(time.replace('Z', '+00:00')) for time in reminder_times]
+        
+        # Remove duplicates by converting to ISO strings and using a set
+        unique_times_iso = set()
+        unique_datetimes = []
+        
+        for dt in reminder_datetimes:
+            iso_str = dt.isoformat()
+            if iso_str not in unique_times_iso:
+                unique_times_iso.add(iso_str)
+                unique_datetimes.append(dt)
+        
+        return unique_datetimes
     except Exception as e:
         print(f"Error getting reminder suggestions: {str(e)}")
         # Return a single reminder at 75% of the time between creation and due date if LLM fails
@@ -597,11 +615,24 @@ async def create_task(task: Task):
                 datetime.now(timezone.utc).isoformat()
             )
             
+            # Set to track already added reminder times
+            added_reminder_times = set()
+            
             # Create reminders
             for reminder_time in reminder_times:
+                # Check for duplicates
+                iso_time = reminder_time.isoformat()
+                if iso_time in added_reminder_times:
+                    logger.info(f"Skipping duplicate reminder time: {iso_time}")
+                    continue
+                    
+                # Add to tracking set
+                added_reminder_times.add(iso_time)
+                
+                # Create reminder
                 reminder_data = {
                     "task_id": task_id,
-                    "reminder_time": reminder_time.isoformat()
+                    "reminder_time": iso_time
                 }
                 supabase.table("reminders").insert(reminder_data).execute()
         
@@ -938,49 +969,40 @@ def check_reminder_processed(reminder_id):
     Returns True if already processed, False otherwise
     """
     try:
-        # First ensure the table exists
-        try:
-            # Try to access the table to see if it exists
-            test_result = supabase.table("processed_reminders").select("count").limit(1).execute()
-            logger.info(f"Processed reminders table exists and is accessible")
-        except Exception as table_error:
-            # Table doesn't exist or isn't accessible, create it
-            logger.warning(f"Processed reminders table issue: {str(table_error)}")
-            logger.info("Creating processed_reminders table")
-            create_processed_table_query = """
-            CREATE TABLE IF NOT EXISTS processed_reminders (
-                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                reminder_id UUID REFERENCES reminders(id) ON DELETE CASCADE,
-                processed_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                message_id TEXT,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_reminders(reminder_id);
-            """
-            # Try to create the table via RPC
-            try:
-                supabase.rpc("exec_sql", {"query": create_processed_table_query}).execute()
-                logger.info("Successfully created processed_reminders table")
-            except Exception as rpc_error:
-                logger.error(f"Failed to create processed_reminders table via RPC: {str(rpc_error)}")
+        # First print the reminder_id for debugging
+        print(f"  Checking if reminder {reminder_id} has been processed")
+        logger.info(f"Checking processed status for reminder: {reminder_id}")
         
-        # Now check if this specific reminder has been processed
-        result = (
+        # Check if this specific reminder has been processed (assuming table exists)
+        processed_result = (
             supabase.table("processed_reminders")
             .select("*")
             .eq("reminder_id", reminder_id)
             .execute()
         )
         
-        is_processed = len(result.data) > 0
-        logger.info(f"Reminder {reminder_id} processed status check: {is_processed}")
-        if is_processed:
-            logger.info(f"Reminder {reminder_id} was previously processed at {result.data[0].get('processed_at')}")
+        is_processed = len(processed_result.data) > 0
+        print(f"  Reminder {reminder_id} processed status: {is_processed}")
+        logger.info(f"Reminder {reminder_id} processed status: {is_processed}")
         
-        # If any records found, the reminder has been processed
+        if is_processed and len(processed_result.data) > 0:
+            processed_time = processed_result.data[0].get("processed_at", "unknown")
+            print(f"  Reminder {reminder_id} was previously processed at {processed_time}")
+            logger.info(f"Reminder {reminder_id} was previously processed at {processed_time}")
+        
+        # Return the processed status
         return is_processed
     except Exception as e:
-        logger.warning(f"Error checking if reminder {reminder_id} is processed: {str(e)}")
+        error_message = str(e)
+        print(f"  Error checking if reminder {reminder_id} is processed: {error_message}")
+        logger.warning(f"Error checking if reminder {reminder_id} is processed: {error_message}")
+        
+        # If the table doesn't exist, we assume not processed, but don't try to create it here
+        # The table should be created manually in Supabase SQL editor
+        if "relation" in error_message and "does not exist" in error_message:
+            print(f"  The processed_reminders table doesn't exist yet. Please create it using the SQL provided.")
+            logger.warning(f"The processed_reminders table doesn't exist yet. Please create it manually.")
+        
         # If we can't check, assume not processed to be safe
         return False
 
@@ -992,17 +1014,24 @@ def mark_reminder_processed(reminder_id, message_id=None, now_utc=None):
     if now_utc is None:
         now_utc = datetime.now(timezone.utc)
     
+    print(f"  Attempting to mark reminder {reminder_id} as processed")
+    logger.info(f"Attempting to mark reminder {reminder_id} as processed")
+    
     # First check if already processed to avoid duplicate entries
     try:
         already_processed = check_reminder_processed(reminder_id)
         if already_processed:
+            print(f"  Reminder {reminder_id} already marked as processed, skipping")
             logger.info(f"Reminder {reminder_id} already marked as processed, skipping")
             return True
     except Exception as check_error:
-        logger.warning(f"Error checking if reminder {reminder_id} is already processed: {str(check_error)}")
+        error_message = str(check_error)
+        print(f"  Error checking if reminder {reminder_id} is already processed: {error_message}")
+        logger.warning(f"Error checking if reminder {reminder_id} is already processed: {error_message}")
         # Continue anyway to try to mark it
         
     try:
+        # Prepare data for insertion
         data = {
             "reminder_id": reminder_id,
             "processed_at": now_utc.isoformat(),
@@ -1010,101 +1039,171 @@ def mark_reminder_processed(reminder_id, message_id=None, now_utc=None):
         if message_id:
             data["message_id"] = message_id
         
+        print(f"  Marking reminder {reminder_id} as processed at {now_utc.isoformat()}")
         logger.info(f"Marking reminder {reminder_id} as processed with data: {json.dumps(data, default=str)}")
+        
+        # Try to insert the record
         insert_result = supabase.table("processed_reminders").insert(data).execute()
+        
+        print(f"  ✅ Successfully marked reminder {reminder_id} as processed")
         logger.info(f"Successfully marked reminder {reminder_id} as processed")
+        
+        # Double check insertion worked by querying the table
+        verify_result = (
+            supabase.table("processed_reminders")
+            .select("*")
+            .eq("reminder_id", reminder_id)
+            .execute()
+        )
+        if len(verify_result.data) > 0:
+            print(f"  ✅ Verified reminder {reminder_id} is marked as processed")
+            logger.info(f"Verified reminder {reminder_id} is marked as processed")
+        else:
+            print(f"  ⚠️ Could not verify reminder {reminder_id} was marked as processed")
+            logger.warning(f"Could not verify reminder {reminder_id} was marked as processed")
+        
         return True
     except Exception as e:
-        error_str = str(e)
-        # If the table doesn't exist, try to create it
-        if "relation" in error_str and "does not exist" in error_str:
-            try:
-                # Create the processed_reminders table
-                logger.info("Creating processed_reminders table")
-                create_processed_table_query = """
-                CREATE TABLE IF NOT EXISTS processed_reminders (
-                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                    reminder_id UUID REFERENCES reminders(id) ON DELETE CASCADE,
-                    processed_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                    message_id TEXT,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_reminders(reminder_id);
-                """
-                # Try to create the table via RPC
-                try:
-                    supabase.rpc("exec_sql", {"query": create_processed_table_query}).execute()
-                    
-                    # Try insertion again
-                    data = {
-                        "reminder_id": reminder_id,
-                        "processed_at": now_utc.isoformat(),
-                    }
-                    if message_id:
-                        data["message_id"] = message_id
-                    
-                    supabase.table("processed_reminders").insert(data).execute()
-                    logger.info(f"Successfully created table and marked reminder {reminder_id} as processed")
-                    return True
-                except Exception as rpc_error:
-                    logger.error(f"Failed to create processed_reminders table via RPC: {str(rpc_error)}")
-                    return False
-            except Exception as create_error:
-                logger.error(f"Failed to create processed_reminders table: {str(create_error)}")
-                return False
-        else:
-            logger.error(f"Error marking reminder {reminder_id} as processed: {error_str}")
-            return False
+        error_message = str(e)
+        print(f"  ❌ Error marking reminder {reminder_id} as processed: {error_message}")
+        logger.error(f"Error marking reminder {reminder_id} as processed: {error_message}")
+        
+        # If table doesn't exist, inform user to create it
+        if "relation" in error_message and "does not exist" in error_message:
+            print(f"  ❌ The processed_reminders table doesn't exist. Please create it manually using SQL")
+            logger.error(f"The processed_reminders table doesn't exist. Please create it manually using SQL.")
+            print(f"""  
+CREATE TABLE IF NOT EXISTS processed_reminders (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    reminder_id UUID REFERENCES reminders(id) ON DELETE CASCADE,
+    processed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    message_id TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_reminders(reminder_id);
+            """)
+        
+        return False
 
 # Add an admin endpoint to reset the processed reminders
 @app.post("/api/admin/reset-processed-reminders")
 async def reset_processed_reminders(request: Request):
     """Admin endpoint to reset processed reminders so they can be sent again"""
+    print("\n" + "*"*80)
+    print("* RESET PROCESSED REMINDERS ENDPOINT CALLED")
+    print("*"*80)
+    
     # Get verification token from environment
-    verify_token = os.getenv("VERIFY_TOKEN")
+    verify_token = os.getenv("VERIFY_TOKEN", "clemencefranklin")  # Default for local testing
     
     # Get authorization header
     auth_header = request.headers.get("Authorization")
     
+    # Print all headers for debugging
+    print("\nRequest headers:")
+    for header, value in request.headers.items():
+        print(f"  {header}: {value[:20]}{'...' if len(value) > 20 else ''}")
+    
+    logger.info(f"Received reset-processed-reminders request with auth: {auth_header[:15] + '...' if auth_header else 'None'}")
+    
     # Verify the token for security
     if verify_token and (not auth_header or auth_header != f"Bearer {verify_token}"):
+        print(f"\n❌ UNAUTHORIZED - Expected 'Bearer {verify_token}', got '{auth_header}'")
         logger.warning(f"Unauthorized access attempt to reset-processed-reminders endpoint")
         raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    print(f"\n✅ AUTHORIZATION SUCCESSFUL")
+    logger.info(f"Authorization successful for reset-processed-reminders endpoint")
     
     try:
         # Try to clear the processed_reminders table
         try:
+            # Try to delete all records
+            print(f"  Deleting all records from processed_reminders table")
             deleted_result = supabase.table("processed_reminders").delete().neq("id", "dummy").execute()
             processed_cleared = True
             cleared_count = len(deleted_result.data)
+            print(f"  Deleted {cleared_count} processed reminder records")
         except Exception as e:
+            error_message = str(e)
             processed_cleared = False
             cleared_count = 0
-            logger.warning(f"Could not clear processed_reminders table: {str(e)}")
+            print(f"  Could not clear processed_reminders table: {error_message}")
+            logger.warning(f"Could not clear processed_reminders table: {error_message}")
+            
+            # If table doesn't exist, inform the user
+            if "relation" in error_message and "does not exist" in error_message:
+                print(f"  The processed_reminders table doesn't exist yet. Please create it using SQL:")
+                print(f"""  
+CREATE TABLE IF NOT EXISTS processed_reminders (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    reminder_id UUID REFERENCES reminders(id) ON DELETE CASCADE,
+    processed_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    message_id TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_reminders(reminder_id);
+                """)
         
         # Also reset the last_processed_time in app_status as a fallback
         reset_time = datetime.now(timezone.utc) - timedelta(hours=24)
         try:
-            update_result = (
+            print(f"  Resetting last_processed_time to {reset_time.isoformat()}")
+            
+            # First check if the record exists
+            app_status_result = (
                 supabase.table("app_status")
-                .update({"value": reset_time.isoformat()})
+                .select("*")
                 .eq("name", "last_processed_time")
                 .execute()
             )
+            
+            if app_status_result.data and len(app_status_result.data) > 0:
+                # Update existing record
+                update_result = (
+                    supabase.table("app_status")
+                    .update({"value": reset_time.isoformat()})
+                    .eq("name", "last_processed_time")
+                    .execute()
+                )
+                print(f"  Updated existing last_processed_time record")
+            else:
+                # Insert new record
+                insert_result = (
+                    supabase.table("app_status")
+                    .insert({"name": "last_processed_time", "value": reset_time.isoformat()})
+                    .execute()
+                )
+                print(f"  Created new last_processed_time record")
+            
             time_reset = True
+            print(f"  ✅ Successfully reset last_processed_time to {reset_time.isoformat()}")
         except Exception as e:
+            error_message = str(e)
             time_reset = False
-            logger.warning(f"Could not reset last_processed_time: {str(e)}")
+            print(f"  Could not reset last_processed_time: {error_message}")
+            logger.warning(f"Could not reset last_processed_time: {error_message}")
         
-        return {
+        result = {
             "message": "Reminder processing history reset",
             "processed_reminders_cleared": processed_cleared,
             "cleared_count": cleared_count,
             "last_processed_time_reset": time_reset,
-            "reset_to": reset_time.isoformat() if time_reset else None
+            "reset_to": reset_time.isoformat() if time_reset else None,
+            "note": "If processed_reminders table doesn't exist, please create it manually in Supabase" if not processed_cleared else None
         }
+        
+        print("\n" + "-"*80)
+        print(f"- REMINDER PROCESSING HISTORY RESET COMPLETED")
+        print(f"- Cleared: {cleared_count} records, Time reset: {time_reset}")
+        print("-"*80)
+        
+        logger.info(f"Reset reminder processing history: {json.dumps(result)}")
+        
+        return result
     except Exception as e:
         error_msg = str(e)
+        print(f"\n❌ ERROR RESETTING REMINDER PROCESSING HISTORY: {error_msg}")
         logger.error(f"Error resetting reminder processing history: {error_msg}", exc_info=True)
         raise HTTPException(status_code=500, detail=error_msg)
 
