@@ -959,6 +959,13 @@ async def cron_ping_post():
         "message": "Cron ping received and processed"
     }
 
+@app.head("/api/cron-ping")
+async def cron_ping_head():
+    """HEAD endpoint for UptimeRobot free plan to ping to keep the server alive"""
+    logger.info("Received HEAD cron ping to keep server alive (likely from UptimeRobot)")
+    # For HEAD method, we don't need to return a body, just a successful status code
+    return None
+
 def execute_migration():
     """Helper function to execute the reminders table migration"""
     # Determine the migration file path based on environment
