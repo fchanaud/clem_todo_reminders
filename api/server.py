@@ -942,6 +942,23 @@ async def cron_ping():
         "message": "Cron ping received and processed"
     }
 
+@app.post("/api/cron-ping")
+async def cron_ping_post():
+    """POST endpoint for external cron services to ping to keep the server alive"""
+    logger.info("Received POST cron ping to keep server alive")
+    # Perform a small dummy database operation to keep connections warm
+    try:
+        tasks_count = supabase.table(f"{TABLE_PREFIX}tasks").select("id", count="exact").execute()
+        logger.info(f"Current tasks count: {tasks_count.count if hasattr(tasks_count, 'count') else 'unknown'}")
+    except Exception as e:
+        logger.warning(f"Error during cron ping database operation: {str(e)}")
+    
+    return {
+        "status": "alive", 
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "message": "Cron ping received and processed"
+    }
+
 def execute_migration():
     """Helper function to execute the reminders table migration"""
     # Determine the migration file path based on environment
