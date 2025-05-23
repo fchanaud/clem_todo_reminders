@@ -1,0 +1,66 @@
+================================================================================
+SERVER STARTING - DEBUGGING ENABLED
+================================================================================
+Loaded configuration from .env
+Running in DEVELOPMENT environment
+Using table prefix: 'dev_'
+2025-05-23 16:17:15,881 - todo-reminders - INFO - Using table prefix: 'dev_'
+2025-05-23 16:17:15,881 - todo-reminders - INFO - Using task key in joins: 'tasks'
+Environment Variables:
+NEXT_PUBLIC_SUPABASE_URL: ****************************************
+NEXT_PUBLIC_SUPABASE_ANON_KEY: ****************************************************************************************************************************************************************************************************************
+OPENAI_API_KEY: ********************************************************************************************************************************************************************
+PUSHOVER_API_TOKEN: ******************************
+PUSHOVER_USER_KEY: ******************************
+Supabase version: 2.3.4
+GoTrue version: 2.9.1
+Removing 'proxy' from httpx Client kwargs to prevent errors
+Connected to database at https://krnevighxvvwnorqjhum.s...
+2025-05-23 16:17:15,891 - todo-reminders - INFO - Connected to database
+/Users/fchanaud/ml_projects/clem_todo_reminders/api/server.py:1024: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("startup")
+Supabase URL configured: Yes
+Supabase Key configured: Yes
+2025-05-23 16:17:16,285 - todo-reminders - INFO - OpenAI client initialized successfully
+OpenAI API Key configured: Yes
+Pushover API configured: Yes
+
+Database Configuration:
+- Environment: PRODUCTION
+
+Server Usage:
+- Run locally: python server.py
+
+Setup Instructions:
+- Ensure your .env file has the required environment variables
+INFO:     Started server process [47931]
+INFO:     Waiting for application startup.
+2025-05-23 16:17:16,321 - todo-reminders - INFO - Running database migrations...
+2025-05-23 16:17:16,449 - httpx - INFO - HTTP Request: POST https://krnevighxvvwnorqjhum.supabase.co/rest/v1/rpc/exec_sql "HTTP/1.1 404 Not Found"
+2025-05-23 16:17:16,449 - todo-reminders - WARNING - Could not apply migration from path migrations/create_reminders_table.sql: {'code': 'PGRST202', 'details': 'Searched for the function public.exec_sql with parameter query or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.', 'hint': None, 'message': 'Could not find the function public.exec_sql(query) in the schema cache'}
+2025-05-23 16:17:16,493 - httpx - INFO - HTTP Request: POST https://krnevighxvvwnorqjhum.supabase.co/rest/v1/rpc/exec_sql "HTTP/1.1 404 Not Found"
+2025-05-23 16:17:16,493 - todo-reminders - WARNING - Could not apply migration from path ./migrations/create_reminders_table.sql: {'code': 'PGRST202', 'details': 'Searched for the function public.exec_sql with parameter query or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.', 'hint': None, 'message': 'Could not find the function public.exec_sql(query) in the schema cache'}
+2025-05-23 16:17:16,493 - todo-reminders - WARNING - Using direct table creation as SQL file could not be read
+2025-05-23 16:17:16,556 - httpx - INFO - HTTP Request: GET https://krnevighxvvwnorqjhum.supabase.co/rest/v1/dev_reminders?select=id&limit=1 "HTTP/1.1 200 OK"
+2025-05-23 16:17:16,558 - todo-reminders - INFO - Reminders table already exists
+2025-05-23 16:17:16,601 - httpx - INFO - HTTP Request: GET https://krnevighxvvwnorqjhum.supabase.co/rest/v1/dev_app_status?select=id&limit=1 "HTTP/1.1 200 OK"
+2025-05-23 16:17:16,601 - todo-reminders - INFO - App status table already exists
+2025-05-23 16:17:16,645 - httpx - INFO - HTTP Request: GET https://krnevighxvvwnorqjhum.supabase.co/rest/v1/dev_processed_reminders?select=id&limit=1 "HTTP/1.1 404 Not Found"
+2025-05-23 16:17:16,645 - todo-reminders - INFO - Processed reminders table doesn't exist yet
+2025-05-23 16:17:16,645 - todo-reminders - INFO - Database tables checked/created
+2025-05-23 16:17:16,645 - todo-reminders - INFO - Database migrations completed
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2025-05-23 16:17:25,703 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-05-23 16:17:25,801 - httpx - INFO - HTTP Request: PATCH https://krnevighxvvwnorqjhum.supabase.co/rest/v1/dev_tasks?id=eq.edc6cd7e-6a23-44f3-979d-0bd45574b55f "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:57087 - "PATCH /api/tasks/edc6cd7e-6a23-44f3-979d-0bd45574b55f/update-due-date HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57180 - "GET / HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [47931]

@@ -33,7 +33,7 @@ httpx.Client.__init__ = patched_init
 
 # Now import supabase after the monkey patch
 from supabase import create_client, Client
-from openai import OpenAI
+# Remove OpenAI import from here - we'll import it when needed
 
 # Configure logging
 logging.basicConfig(
@@ -53,17 +53,28 @@ print("="*80)
 load_dotenv()
 print("Loaded configuration from .env")
 
-# Get Supabase credentials - simple approach with a single set
+# Determine environment and set table prefix
+env = os.getenv("ENV", "development").lower()
+TABLE_PREFIX = "dev_" if env == "development" else ""
+
+if env == "development":
+    print("Running in DEVELOPMENT environment")
+    print(f"Using table prefix: '{TABLE_PREFIX}'")
+    # Load development environment file if it exists
+    if os.path.exists(".env.development"):
+        load_dotenv(".env.development", override=True)
+        print("Loaded configuration from .env.development")
+else:
+    print("Running in PRODUCTION environment")
+    print("Using no table prefix")
+
+# Get Supabase credentials
 supabase_url = os.getenv("NEXT_PUBLIC_SUPABASE_URL")
 supabase_key = os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
-# No more table prefixes - simplify to use the same tables in all environments
-TABLE_PREFIX = ""
-print(f"Using simplified database configuration with no table prefixes")
-logger.info(f"Using simplified database configuration with no table prefixes")
-
 # Define the task key used in database joins
 TASK_KEY = "tasks"
+logger.info(f"Using table prefix: '{TABLE_PREFIX}'")
 logger.info(f"Using task key in joins: '{TASK_KEY}'")
 
 # Pushover API configuration
@@ -71,8 +82,21 @@ PUSHOVER_API_TOKEN = os.getenv("PUSHOVER_API_TOKEN")
 PUSHOVER_USER_KEY = os.getenv("PUSHOVER_USER_KEY")
 RECIPIENT_USER_KEY = os.getenv("RECIPIENT_USER_KEY", PUSHOVER_USER_KEY)  # Default recipient user key
 
-# Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Global variable to hold the OpenAI client
+_openai_client = None
+
+def get_openai_client():
+    """Lazy initialization of OpenAI client"""
+    global _openai_client
+    if _openai_client is None:
+        try:
+            from openai import OpenAI
+            _openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            logger.info("OpenAI client initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize OpenAI client: {str(e)}")
+            _openai_client = None
+    return _openai_client
 
 # Check if credentials are available
 if not supabase_url or not supabase_key:
@@ -281,7 +305,7 @@ def check_upcoming_reminders():
         
         try:
             reminders_result = (
-                supabase.table("reminders")
+                supabase.table(f"{TABLE_PREFIX}reminders")
                 .select("*, tasks(*)")
                 .gte("reminder_time", utc_hour_start.isoformat())
                 .lt("reminder_time", utc_hour_end.isoformat())
@@ -296,16 +320,8 @@ def check_upcoming_reminders():
             # Handle the case when the reminders table doesn't exist
             error_str = str(query_error)
             if "relation \"public.reminders\" does not exist" in error_str:
-                print("  Error: Reminders table doesn't exist yet. Creating it...")
+                print("  Error: Reminders table doesn't exist yet.")
                 logger.error("Reminders table doesn't exist yet.")
-                
-                # Create the reminders table
-                try:
-                    execute_migration()
-                except Exception as migration_error:
-                    print(f"  ❌ Failed to create reminders table: {str(migration_error)}")
-                    logger.error(f"Failed to create reminders table: {str(migration_error)}")
-                
                 # No reminders to process this time
                 reminders = []
             else:
@@ -318,7 +334,7 @@ def check_upcoming_reminders():
         processed_table_exists = True
         try:
             # Try checking the table
-            test_result = supabase.table("processed_reminders").select("count").limit(1).execute()
+            test_result = supabase.table(f"{TABLE_PREFIX}processed_reminders").select("count").limit(1).execute()
             print(f"  Processed reminders table is accessible")
         except Exception as table_error:
             error_message = str(table_error)
@@ -341,7 +357,7 @@ CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_remi
         # Check last processed reminder time in database
         try:
             processed_status = (
-                supabase.table("app_status")
+                supabase.table(f"{TABLE_PREFIX}app_status")
                 .select("*")
                 .eq("name", "last_processed_time")
                 .execute()
@@ -356,7 +372,7 @@ CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_remi
                 last_processed_time = default_time
                 print(f"  No last processed time found, defaulting to {catchup_hours} hours ago")
                 
-                supabase.table("app_status").insert({
+                supabase.table(f"{TABLE_PREFIX}app_status").insert({
                     "name": "last_processed_time",
                     "value": default_time.isoformat()
                 }).execute()
@@ -367,7 +383,7 @@ CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_remi
             
             try:
                 # Try to create the table if it doesn't exist
-                supabase.table("app_status").insert({
+                supabase.table(f"{TABLE_PREFIX}app_status").insert({
                     "name": "last_processed_time",
                     "value": (now_utc - timedelta(hours=catchup_hours)).isoformat()
                 }).execute()
@@ -491,7 +507,7 @@ CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_remi
         
         # Update the last processed time
         try:
-            supabase.table("app_status").update({"value": now_utc.isoformat()}).eq("name", "last_processed_time").execute()
+            supabase.table(f"{TABLE_PREFIX}app_status").update({"value": now_utc.isoformat()}).eq("name", "last_processed_time").execute()
             print(f"  Updated last processed time to: {now_utc.isoformat()}")
         except Exception as e:
             print(f"  Error updating last processed time: {str(e)}")
@@ -548,6 +564,16 @@ def is_bst(utc_time):
 
 def get_reminder_suggestions(task_title: str, priority: str, due_date: str, created_at: str) -> List[datetime]:
     try:
+        client = get_openai_client()
+        if not client:
+            logger.warning("OpenAI client not available, using fallback reminder suggestion")
+            # Return a single reminder at 75% of the time between creation and due date if OpenAI fails
+            due_date_dt = datetime.fromisoformat(due_date.replace('Z', '+00:00'))
+            created_at_dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+            time_diff = due_date_dt - created_at_dt
+            reminder_time = created_at_dt + (time_diff * 0.75)
+            return [reminder_time]
+
         prompt = f"""Given:
 Task: {task_title}
 Priority: {priority}
@@ -620,16 +646,10 @@ async def create_task(task: Task):
         if task.phone_number:
             task_data["phone_number"] = task.phone_number
             
-        task_result = supabase.table("tasks").insert(task_data).execute()
+        task_result = supabase.table(f"{TABLE_PREFIX}tasks").insert(task_data).execute()
         task_id = task_result.data[0]['id']
         
-        # Make sure the reminders table exists
-        try:
-            execute_migration()
-        except Exception as migration_error:
-            logger.error(f"Error running migration: {str(migration_error)}")
-            # Continue with task creation even if migration fails
-        
+        # Note: Reminders table should already exist, if not handle gracefully
         if task.single_reminder:
             # Calculate single reminder time
             reminder_time = task.due_time - timedelta(hours=task.hours_before)
@@ -637,7 +657,7 @@ async def create_task(task: Task):
                 "task_id": task_id,
                 "reminder_time": reminder_time.isoformat()
             }
-            supabase.table("reminders").insert(reminder_data).execute()
+            supabase.table(f"{TABLE_PREFIX}reminders").insert(reminder_data).execute()
         else:
             # Get reminder suggestions from LLM
             reminder_times = get_reminder_suggestions(
@@ -666,7 +686,7 @@ async def create_task(task: Task):
                     "task_id": task_id,
                     "reminder_time": iso_time
                 }
-                supabase.table("reminders").insert(reminder_data).execute()
+                supabase.table(f"{TABLE_PREFIX}reminders").insert(reminder_data).execute()
         
         return task_result.data[0]
     except HTTPException as e:
@@ -680,7 +700,7 @@ async def complete_task(task_id: str):
     try:
         # Update the task as completed
         result = (
-            supabase.table("tasks")
+            supabase.table(f"{TABLE_PREFIX}tasks")
             .update({
                 "completed": True,
                 "completed_at": datetime.now(timezone.utc).isoformat()
@@ -697,7 +717,7 @@ async def get_tasks():
     try:
         # Get incomplete tasks first, ordered by due_time and priority
         incomplete_tasks_result = (
-            supabase.table("tasks")
+            supabase.table(f"{TABLE_PREFIX}tasks")
             .select("*")
             .eq("completed", False)
             .order('due_time', desc=False)
@@ -707,7 +727,7 @@ async def get_tasks():
 
         # Get completed tasks, ordered by completion time
         completed_tasks_result = (
-            supabase.table("tasks")
+            supabase.table(f"{TABLE_PREFIX}tasks")
             .select("*")
             .eq("completed", True)
             .order('completed_at', desc=True)
@@ -727,7 +747,7 @@ async def get_tasks():
         all_reminders = {}
         if all_task_ids:
             try:
-                reminders_result = supabase.table("reminders").select("*").in_("task_id", all_task_ids).execute()
+                reminders_result = supabase.table(f"{TABLE_PREFIX}reminders").select("*").in_("task_id", all_task_ids).execute()
                 
                 # Group reminders by task_id for easier assignment
                 for reminder in reminders_result.data:
@@ -755,10 +775,139 @@ async def get_tasks():
 async def delete_task(task_id: str):
     try:
         # Delete associated reminders first
-        supabase.table("reminders").delete().eq("task_id", task_id).execute()
+        supabase.table(f"{TABLE_PREFIX}reminders").delete().eq("task_id", task_id).execute()
         # Then delete the task
-        result = supabase.table("tasks").delete().eq("id", task_id).execute()
+        result = supabase.table(f"{TABLE_PREFIX}tasks").delete().eq("id", task_id).execute()
         return {"message": "Task and associated reminders deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class UpdateTaskRequest(BaseModel):
+    due_time: Optional[str] = None
+    title: Optional[str] = None
+    priority: Optional[str] = None
+
+@app.patch("/api/tasks/{task_id}")
+async def update_task(task_id: str, request: UpdateTaskRequest):
+    try:
+        # Build update data from provided fields
+        update_data = {}
+        if request.due_time is not None:
+            update_data["due_time"] = request.due_time
+        if request.title is not None:
+            update_data["title"] = request.title
+        if request.priority is not None:
+            update_data["priority"] = request.priority
+        
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        
+        # Update the task
+        result = (
+            supabase.table(f"{TABLE_PREFIX}tasks")
+            .update(update_data)
+            .eq("id", task_id)
+            .execute()
+        )
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        return {"message": "Task updated successfully", "task": result.data[0]}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class UpdateDueDateRequest(BaseModel):
+    current_due_date: str
+    task_title: str
+
+@app.patch("/api/tasks/{task_id}/update-due-date")
+async def update_task_due_date(task_id: str, request: UpdateDueDateRequest):
+    try:
+        # Get OpenAI suggestion for new due date
+        now = datetime.now(timezone.utc)
+        current_date = datetime.fromisoformat(request.current_due_date.replace('Z', '+00:00'))
+        
+        # Try to get OpenAI suggestion, fallback to simple logic if not available
+        client = get_openai_client()
+        suggested_date_utc = None
+        
+        if client:
+            try:
+                prompt = f"""Task: "{request.task_title}"
+Current due date: {current_date.strftime('%Y-%m-%d %H:%M')}
+Current time: {now.strftime('%Y-%m-%d %H:%M')}
+
+Suggest a better due date for this task. Consider:
+- If overdue, suggest within next 1-3 days
+- If due soon, extend by appropriate amount based on task complexity
+- Keep reasonable working hours (9 AM - 6 PM)
+- Return only the new date in format: YYYY-MM-DD HH:MM"""
+                
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that suggests realistic due dates for tasks. Always respond with only the date in YYYY-MM-DD HH:MM format."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=50
+                )
+                
+                suggested_date_str = response.choices[0].message.content.strip()
+                
+                # Parse the suggested date
+                try:
+                    # Try to parse the date
+                    suggested_date = datetime.strptime(suggested_date_str, '%Y-%m-%d %H:%M')
+                    # Convert to UTC timezone
+                    suggested_date_utc = suggested_date.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    logger.warning(f"Failed to parse OpenAI suggested date: {suggested_date_str}")
+                    suggested_date_utc = None
+            except Exception as e:
+                logger.error(f"OpenAI request failed: {str(e)}")
+                suggested_date_utc = None
+        
+        # Fallback logic if OpenAI is not available or failed
+        if suggested_date_utc is None:
+            logger.info("Using fallback date calculation")
+            # Simple fallback: add 2 days to current date if parsing fails or OpenAI unavailable
+            suggested_date_utc = now + timedelta(days=2)
+            suggested_date_utc = suggested_date_utc.replace(hour=14, minute=0, second=0, microsecond=0)
+        
+        # Ensure the new date is not in the past
+        if suggested_date_utc <= now:
+            suggested_date_utc = now + timedelta(days=1)
+            suggested_date_utc = suggested_date_utc.replace(hour=14, minute=0, second=0, microsecond=0)
+        
+        # Update the task's due date and mark as edited
+        update_data = {
+            "due_time": suggested_date_utc.isoformat()
+            # Remove edited fields until they are added to the database
+            # "edited": True,
+            # "edited_at": now.isoformat()
+        }
+        
+        result = (
+            supabase.table(f"{TABLE_PREFIX}tasks")
+            .update(update_data)
+            .eq("id", task_id)
+            .execute()
+        )
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        return {
+            "message": "Due date updated successfully",
+            "new_due_date": suggested_date_utc.isoformat(),
+            "suggested_by_ai": bool(client)
+        }
+    except HTTPException as e:
+        raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -897,17 +1046,13 @@ async def check_reminders_endpoint(request: Request):
 
 @app.on_event("startup")
 async def startup_event():
-    """Run database migrations on startup"""
+    """Simple startup without migrations"""
     try:
-        logger.info("Running database migrations...")
-        
-        # Create the reminders table if it doesn't exist
-        execute_migration()
-            
-        logger.info("Database migrations completed")
+        logger.info("Server starting up...")
+        logger.info("Startup completed successfully")
     except Exception as e:
-        logger.error(f"Error running migrations: {str(e)}")
-        # Don't fail startup if migrations fail
+        logger.error(f"Error during startup: {str(e)}")
+        # Don't fail startup
 
 @app.get("/")
 async def health_check():
@@ -915,7 +1060,7 @@ async def health_check():
         "status": "ok", 
         "message": "Task Reminder API is running",
         "supabase_configured": bool(supabase_url and supabase_key),
-        "openai_configured": bool(client.api_key),
+        "openai_configured": bool(get_openai_client()),
         "pushover_configured": bool(PUSHOVER_API_TOKEN and PUSHOVER_USER_KEY)
     }
 
@@ -966,100 +1111,6 @@ async def cron_ping_head():
     # For HEAD method, we don't need to return a body, just a successful status code
     return None
 
-def execute_migration():
-    """Helper function to execute the reminders table migration"""
-    # Determine the migration file path based on environment
-    migration_paths = [
-        "api/migrations/create_reminders_table.sql",  # From project root
-        "migrations/create_reminders_table.sql",      # From api directory
-        "./migrations/create_reminders_table.sql",    # Explicitly relative
-        "/app/api/migrations/create_reminders_table.sql"  # Absolute path for containerized environments
-    ]
-    
-    # Try each path until one works
-    for path in migration_paths:
-        try:
-            if os.path.exists(path):
-                with open(path) as f:
-                    migration_sql = f.read()
-                    # No more table prefixes
-                    migration_sql = migration_sql.replace("public.reminders", "public.reminders")
-                    migration_sql = migration_sql.replace("tasks(id)", "tasks(id)")
-                    migration_sql = migration_sql.replace("idx_reminders_task_id", "idx_reminders_task_id")
-                    # Use rpc instead of query for Supabase 2.3.4
-                    supabase.rpc("exec_sql", {"query": migration_sql}).execute()
-                logger.info(f"Applied create_reminders_table migration from path: {path}")
-                
-                # Try to create the processed_reminders table too
-                try:
-                    create_processed_table_query = """
-                    CREATE TABLE IF NOT EXISTS processed_reminders (
-                        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                        reminder_id UUID REFERENCES reminders(id) ON DELETE CASCADE,
-                        processed_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                        message_id TEXT,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_reminders(reminder_id);
-                    """
-                    supabase.rpc("exec_sql", {"query": create_processed_table_query}).execute()
-                    logger.info("Created processed_reminders table")
-                except Exception as e:
-                    logger.warning(f"Could not create processed_reminders table: {str(e)}")
-                
-                return True
-        except Exception as path_error:
-            logger.warning(f"Could not apply migration from path {path}: {str(path_error)}")
-    
-    # As a last resort, use direct table creation
-    try:
-        logger.warning("Using direct table creation as SQL file could not be read")
-        
-        # Create reminders table
-        try:
-            # First check if table exists
-            result = supabase.table("reminders").select("id").limit(1).execute()
-            logger.info("Reminders table already exists")
-        except Exception:
-            # Create the reminders table
-            logger.info("Creating reminders table")
-            # We can't use raw SQL easily in this version, so we'll create tables using Supabase REST API
-            # This will be caught by Supabase if table already exists
-            result = supabase.table("tasks").select("id").limit(1).execute()
-        
-        # Create app_status table
-        try:
-            # First check if table exists
-            result = supabase.table("app_status").select("id").limit(1).execute()
-            logger.info("App status table already exists")
-        except Exception:
-            # Create the app_status table and insert initial record
-            logger.info("Creating app_status table")
-            try:
-                # Initialize with a last_processed_time record
-                supabase.table("app_status").insert({
-                    "name": "last_processed_time",
-                    "value": datetime.now(timezone.utc).isoformat()
-                }).execute()
-                logger.info("Created app_status table with initial record")
-            except Exception as e:
-                logger.error(f"Error creating app_status table: {str(e)}")
-        
-        # Create processed_reminders table
-        try:
-            # Check if table exists
-            result = supabase.table("processed_reminders").select("id").limit(1).execute()
-            logger.info("Processed reminders table already exists")
-        except Exception:
-            logger.info("Processed reminders table doesn't exist yet")
-            # Can't create it easily without SQL - will be created when needed
-        
-        logger.info("Database tables checked/created")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to apply migration: {str(e)}")
-        return False
-
 def check_reminder_processed(reminder_id):
     """
     Check if a reminder has already been processed by querying the processed_reminders table
@@ -1072,7 +1123,7 @@ def check_reminder_processed(reminder_id):
         
         # Check if this specific reminder has been processed (assuming table exists)
         processed_result = (
-            supabase.table("processed_reminders")
+            supabase.table(f"{TABLE_PREFIX}processed_reminders")
             .select("*")
             .eq("reminder_id", reminder_id)
             .execute()
@@ -1140,14 +1191,14 @@ def mark_reminder_processed(reminder_id, message_id=None, now_utc=None):
         logger.info(f"Marking reminder {reminder_id} as processed with data: {json.dumps(data, default=str)}")
         
         # Try to insert the record
-        insert_result = supabase.table("processed_reminders").insert(data).execute()
+        insert_result = supabase.table(f"{TABLE_PREFIX}processed_reminders").insert(data).execute()
         
         print(f"  ✅ Successfully marked reminder {reminder_id} as processed")
         logger.info(f"Successfully marked reminder {reminder_id} as processed")
         
         # Double check insertion worked by querying the table
         verify_result = (
-            supabase.table("processed_reminders")
+            supabase.table(f"{TABLE_PREFIX}processed_reminders")
             .select("*")
             .eq("reminder_id", reminder_id)
             .execute()
@@ -1217,7 +1268,7 @@ async def reset_processed_reminders(request: Request):
         try:
             # Try to delete all records
             print(f"  Deleting all records from processed_reminders table")
-            deleted_result = supabase.table("processed_reminders").delete().neq("id", "dummy").execute()
+            deleted_result = supabase.table(f"{TABLE_PREFIX}processed_reminders").delete().neq("id", "dummy").execute()
             processed_cleared = True
             cleared_count = len(deleted_result.data)
             print(f"  Deleted {cleared_count} processed reminder records")
@@ -1249,7 +1300,7 @@ CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_remi
             
             # First check if the record exists
             app_status_result = (
-                supabase.table("app_status")
+                supabase.table(f"{TABLE_PREFIX}app_status")
                 .select("*")
                 .eq("name", "last_processed_time")
                 .execute()
@@ -1258,7 +1309,7 @@ CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_remi
             if app_status_result.data and len(app_status_result.data) > 0:
                 # Update existing record
                 update_result = (
-                    supabase.table("app_status")
+                    supabase.table(f"{TABLE_PREFIX}app_status")
                     .update({"value": reset_time.isoformat()})
                     .eq("name", "last_processed_time")
                     .execute()
@@ -1267,7 +1318,7 @@ CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_remi
             else:
                 # Insert new record
                 insert_result = (
-                    supabase.table("app_status")
+                    supabase.table(f"{TABLE_PREFIX}app_status")
                     .insert({"name": "last_processed_time", "value": reset_time.isoformat()})
                     .execute()
                 )
@@ -1304,11 +1355,107 @@ CREATE INDEX IF NOT EXISTS idx_processed_reminders_reminder_id ON processed_remi
         logger.error(f"Error resetting reminder processing history: {error_msg}", exc_info=True)
         raise HTTPException(status_code=500, detail=error_msg)
 
+@app.post("/api/admin/add-edited-fields")
+async def add_edited_fields(request: Request):
+    """Admin endpoint to add the edited and edited_at fields to the tasks table"""
+    print("\n" + "*"*80)
+    print("* ADD EDITED FIELDS ENDPOINT CALLED")
+    print("*"*80)
+    
+    # Get verification token from environment
+    verify_token = os.getenv("VERIFY_TOKEN", "clemencefranklin")  # Default for local testing
+    
+    # Get authorization header
+    auth_header = request.headers.get("Authorization")
+    
+    logger.info(f"Received add-edited-fields request with auth: {auth_header[:15] + '...' if auth_header else 'None'}")
+    
+    # Verify the token for security
+    if verify_token and (not auth_header or auth_header != f"Bearer {verify_token}"):
+        print(f"\n❌ UNAUTHORIZED - Expected 'Bearer {verify_token}', got '{auth_header}'")
+        logger.warning(f"Unauthorized access attempt to add-edited-fields endpoint")
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    print(f"\n✅ AUTHORIZATION SUCCESSFUL")
+    logger.info(f"Authorization successful for add-edited-fields endpoint")
+    
+    try:
+        # SQL to add the edited fields
+        sql = f"""
+        ALTER TABLE public.{TABLE_PREFIX}tasks 
+        ADD COLUMN IF NOT EXISTS edited BOOLEAN DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP WITH TIME ZONE;
+        """
+        
+        print(f"Adding edited fields to {TABLE_PREFIX}tasks table...")
+        print(f"SQL: {sql}")
+        
+        try:
+            # Try to execute the SQL
+            result = supabase.rpc("exec_sql", {"query": sql}).execute()
+            print(f"✅ Successfully added edited fields to tasks table")
+            
+            # Verify the fields were added by trying to query them
+            test_query = supabase.table(f"{TABLE_PREFIX}tasks").select("id, edited, edited_at").limit(1).execute()
+            print(f"✅ Verified that edited fields are accessible")
+            
+            return {
+                "message": "Edited fields added successfully",
+                "table": f"{TABLE_PREFIX}tasks",
+                "fields_added": ["edited", "edited_at"],
+                "success": True
+            }
+        except Exception as e:
+            error_message = str(e)
+            print(f"❌ Error adding edited fields: {error_message}")
+            logger.error(f"Error adding edited fields: {error_message}")
+            
+            # Try alternative approach - simple table update
+            try:
+                print("Trying alternative approach...")
+                # First try to query the table to see current structure
+                table_info = supabase.table(f"{TABLE_PREFIX}tasks").select("*").limit(1).execute()
+                if table_info.data:
+                    existing_fields = list(table_info.data[0].keys()) if table_info.data else []
+                    print(f"Current table fields: {existing_fields}")
+                    
+                    if 'edited' not in existing_fields or 'edited_at' not in existing_fields:
+                        return {
+                            "message": "Fields need to be added manually",
+                            "error": error_message,
+                            "sql_to_run": sql,
+                            "instructions": "Please run this SQL in Supabase SQL editor",
+                            "success": False
+                        }
+                    else:
+                        return {
+                            "message": "Fields already exist",
+                            "table": f"{TABLE_PREFIX}tasks",
+                            "existing_fields": existing_fields,
+                            "success": True
+                        }
+                else:
+                    raise Exception("Could not query table structure")
+            except Exception as e2:
+                print(f"❌ Alternative approach also failed: {str(e2)}")
+                return {
+                    "message": "Failed to add edited fields",
+                    "error": f"Primary: {error_message}, Alternative: {str(e2)}",
+                    "sql_to_run": sql,
+                    "instructions": "Please run this SQL manually in Supabase SQL editor",
+                    "success": False
+                }
+    except Exception as e:
+        error_msg = str(e)
+        print(f"\n❌ ERROR ADDING EDITED FIELDS: {error_msg}")
+        logger.error(f"Error adding edited fields: {error_msg}", exc_info=True)
+        raise HTTPException(status_code=500, detail=error_msg)
+
 if __name__ == "__main__":
     import uvicorn
     print(f"Supabase URL configured: {'Yes' if supabase_url else 'No'}")
     print(f"Supabase Key configured: {'Yes' if supabase_key else 'No'}")
-    print(f"OpenAI API Key configured: {'Yes' if client.api_key else 'No'}")
+    print(f"OpenAI API Key configured: {'Yes' if get_openai_client() else 'No'}")
     print(f"Pushover API configured: {'Yes' if PUSHOVER_API_TOKEN and PUSHOVER_USER_KEY else 'No'}")
     print("\nDatabase Configuration:")
     print(f"- Environment: {'PRODUCTION' if supabase_url else 'DEVELOPMENT'}")
